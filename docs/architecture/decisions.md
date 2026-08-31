@@ -12,6 +12,10 @@ The decoder has one RESP value model. RESP2 is a subset; RESP3 Push, Attribute, 
 
 The client does not automatically retry commands. A timeout or disconnect after a write may mean Redis executed the command; callers must not treat it as a safe negative acknowledgement.
 
+## Connection model
+
+普通命令默认使用每个 Redis 节点一个共享的 NIO 多路复用连接，不要求业务配置连接池大小。事务、Pub/Sub 和阻塞命令使用独占连接；未来只为这些状态型场景提供可选专用连接池。Cluster 模式按节点分别维护共享连接。
+
 ## Current delivery boundary
 
 The initial implementation is standalone only. Public topology promises must not be documented as supported until Sentinel and Cluster routing are implemented and tested.

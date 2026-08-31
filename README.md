@@ -24,6 +24,28 @@ BobaStrawClient.builder()
     .build();
 ```
 
+普通命令默认按每个 Redis 节点复用一个共享多路复用连接，不需要配置连接池大小。事务、Pub/Sub 和阻塞命令使用独立连接。
+
+共享连接默认不发送主动心跳；如需检测长时间空闲连接，可启用：
+
+```java
+BobaStrawClient.builder()
+    .idlePingInterval(Duration.ofSeconds(30))
+    .build();
+```
+
+只有连接空闲超过该间隔时才会发送 PING；业务流量活跃时不会额外发送心跳。
+
+事务专用池按需创建，可选配置其上限、获取等待和空闲回收：
+
+```java
+BobaStrawClient.builder()
+    .transactionPoolMaxSize(8)
+    .transactionAcquireTimeout(Duration.ofSeconds(1))
+    .transactionIdleTimeout(Duration.ofMinutes(1))
+    .build();
+```
+
 ## Build
 
 ```bash

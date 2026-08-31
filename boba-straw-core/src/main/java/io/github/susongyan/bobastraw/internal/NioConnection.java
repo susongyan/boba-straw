@@ -17,6 +17,9 @@ import java.util.Iterator;
 import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.List;
+import java.util.ArrayList;
+import java.util.function.Consumer;
 
 /** One non-blocking TCP connection with FIFO response matching. */
 public final class NioConnection implements AutoCloseable {
@@ -29,13 +32,17 @@ public final class NioConnection implements AutoCloseable {
     private final String username;
     private final String password;
     private final String clientName;
+    private final Duration idlePingInterval;
     private final Queue<Request> outbound = new ArrayDeque<Request>();
     private final Queue<Request> pending = new ArrayDeque<Request>();
     private final RespCodec.Decoder decoder = new RespCodec.Decoder();
     private final Object lock = new Object();
     private final CompletableFuture<Void> ready = new CompletableFuture<Void>();
+    private final Consumer<RespValue> pushListener;
 
     private volatile boolean closed;
+    private volatile long lastActivityNanos = System.nanoTime();
+    private boolean healthCheckInFlight;
     private Selector selector;
     private SocketChannel channel;
 
@@ -48,6 +55,34 @@ public final class NioConnection implements AutoCloseable {
         String password,
         String clientName
     ) {
+        this(host, port, timeout, requestedProtocol, username, password, clientName, null, Duration.ZERO);
+    }
+
+    public NioConnection(
+        String host,
+        int port,
+        Duration timeout,
+        ProtocolVersion requestedProtocol,
+        String username,
+        String password,
+        String clientName,
+        Consumer<RespValue> pushListener
+    ) {
+        this(host, port, timeout, requestedProtocol, username, password, clientName,
+            pushListener, Duration.ZERO);
+    }
+
+    public NioConnection(
+        String host,
+        int port,
+        Duration timeout,
+        ProtocolVersion requestedProtocol,
+        String username,
+        String password,
+        String clientName,
+        Consumer<RespValue> pushListener,
+        Duration idlePingInterval
+    ) {
         this.host = host;
         this.port = port;
         this.timeout = timeout;
@@ -55,6 +90,8 @@ public final class NioConnection implements AutoCloseable {
         this.username = username;
         this.password = password;
         this.clientName = clientName;
+        this.pushListener = pushListener;
+        this.idlePingInterval = idlePingInterval == null ? Duration.ZERO : idlePingInterval;
 
         Thread thread = new Thread(new Runnable() {
             @Override
@@ -68,6 +105,67 @@ public final class NioConnection implements AutoCloseable {
 
     public CompletionStage<RespValue> execute(String[] command) {
         return ready.thenCompose(ignored -> executeConnected(command));
+    }
+
+    public CompletionStage<List<RespValue>> executeBatch(List<String[]> commands) {
+        return ready.thenCompose(ignored -> {
+            List<CompletableFuture<RespValue>> futures = new ArrayList<CompletableFuture<RespValue>>();
+            synchronized (lock) {
+                if (closed) {
+                    CompletableFuture<List<RespValue>> failed = new CompletableFuture<List<RespValue>>();
+                    failed.completeExceptionally(new BobaStrawConnectionException("Client is closed"));
+                    return failed;
+                }
+                for (String[] command : commands) {
+                    Request request = new Request(ByteBuffer.wrap(RespCodec.encodeCommand(command)));
+                    outbound.add(request);
+                    futures.add(request.future);
+                }
+                if (selector != null) {
+                    selector.wakeup();
+                }
+            }
+            CompletableFuture<?>[] all = futures.toArray(new CompletableFuture<?>[futures.size()]);
+            return CompletableFuture.allOf(all).thenApply(ignoredAgain -> {
+                List<RespValue> values = new ArrayList<RespValue>(futures.size());
+                for (CompletableFuture<RespValue> future : futures) {
+                    values.add(future.join());
+                }
+                return values;
+            });
+        });
+    }
+
+    public String host() {
+        return host;
+    }
+
+    public int port() {
+        return port;
+    }
+
+    public ProtocolVersion protocol() {
+        return requestedProtocol;
+    }
+
+    public String username() {
+        return username;
+    }
+
+    public String password() {
+        return password;
+    }
+
+    public String clientName() {
+        return clientName;
+    }
+
+    public boolean isOpen() {
+        return !closed;
+    }
+
+    public Duration idlePingInterval() {
+        return idlePingInterval;
     }
 
     private CompletionStage<RespValue> executeConnected(String[] command) {
@@ -97,6 +195,7 @@ public final class NioConnection implements AutoCloseable {
                 selector.select(100);
                 processSelectedKeys();
                 armWrites();
+                checkIdle();
             }
         } catch (Throwable error) {
             failAll(error);
@@ -235,6 +334,7 @@ public final class NioConnection implements AutoCloseable {
             }
 
             channel.write(request.buffer);
+            lastActivityNanos = System.nanoTime();
             if (request.buffer.hasRemaining()) {
                 return;
             }
@@ -254,16 +354,35 @@ public final class NioConnection implements AutoCloseable {
         if (count == 0) {
             return;
         }
+        lastActivityNanos = System.nanoTime();
 
         decoder.feed(readBuffer.array(), count);
         RespValue value;
         while ((value = decoder.poll()) != null) {
             if (value instanceof RespValue.Push) {
-                // Push routing is added with Pub/Sub support. It must never consume a pending command.
+                if (pushListener != null) {
+                    pushListener.accept(value);
+                }
+                continue;
+            }
+            if (pushListener != null && isPubSubMessage(value)) {
+                pushListener.accept(value);
                 continue;
             }
             completeNextRequest(value);
         }
+    }
+
+    private boolean isPubSubMessage(RespValue value) {
+        if (!(value instanceof RespValue.Array)) {
+            return false;
+        }
+        java.util.List<RespValue> values = ((RespValue.Array) value).values;
+        if (values.isEmpty()) {
+            return false;
+        }
+        String type = values.get(0).asString();
+        return "message".equals(type) || "pmessage".equals(type);
     }
 
     private void completeNextRequest(RespValue value) throws IOException {
@@ -284,6 +403,28 @@ public final class NioConnection implements AutoCloseable {
         } else {
             request.future.complete(value);
         }
+    }
+
+    private void checkIdle() {
+        if (idlePingInterval.isZero() || idlePingInterval.isNegative() || closed) {
+            return;
+        }
+        synchronized (lock) {
+            if (healthCheckInFlight || !outbound.isEmpty() || !pending.isEmpty()
+                || System.nanoTime() - lastActivityNanos < idlePingInterval.toNanos()) {
+                return;
+            }
+            healthCheckInFlight = true;
+        }
+        executeConnected(new String[] { "PING" }).whenComplete((value, error) -> {
+            synchronized (lock) {
+                healthCheckInFlight = false;
+                lastActivityNanos = System.nanoTime();
+            }
+            if (error != null) {
+                close();
+            }
+        });
     }
 
     private void failAll(Throwable cause) {

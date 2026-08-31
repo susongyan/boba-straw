@@ -1,6 +1,7 @@
 package io.github.susongyan.bobastraw;
 
 import io.github.susongyan.bobastraw.internal.NioConnection;
+import io.github.susongyan.bobastraw.internal.TransactionConnectionPool;
 import io.github.susongyan.bobastraw.protocol.RespValue;
 
 import java.net.URI;
@@ -9,6 +10,10 @@ import java.util.concurrent.CompletionStage;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.Set;
+import java.util.Collections;
+import java.util.HashSet;
+import java.util.List;
 
 /**
  * Thread-safe Redis client. The first implementation targets standalone Redis;
@@ -21,22 +26,22 @@ public final class BobaStrawClient implements AutoCloseable {
             thread.setDaemon(true);
             return thread;
         });
-    private final NioConnection connection;
+    private volatile NioConnection connection;
     private final Duration commandTimeout;
     private final BobaStrawSyncCommands sync;
     private final BobaStrawAsyncCommands async;
+    private final Set<NioConnection> dedicatedConnections =
+        Collections.synchronizedSet(new HashSet<NioConnection>());
+    private volatile boolean closed;
+    private final int transactionPoolMaxSize;
+    private TransactionConnectionPool transactionPool;
 
     private BobaStrawClient(Builder builder) {
         this.commandTimeout = builder.commandTimeout;
-        this.connection = new NioConnection(
-            builder.host,
-            builder.port,
-            builder.commandTimeout,
-            builder.protocolVersion,
-            builder.username,
-            builder.password,
-            builder.clientName
-        );
+        this.connection = createConnection(builder.host, builder.port, builder.commandTimeout,
+            builder.protocolVersion, builder.username, builder.password, builder.clientName,
+            builder.idlePingInterval);
+        this.transactionPoolMaxSize = builder.transactionPoolMaxSize;
         this.sync = new BobaStrawSyncCommands(this);
         this.async = new BobaStrawAsyncCommands(this);
     }
@@ -58,14 +63,69 @@ public final class BobaStrawClient implements AutoCloseable {
     }
 
     public BobaStrawTransaction transaction() {
-        return new BobaStrawTransaction(this);
+        ensureClientOpen();
+        synchronized (this) {
+            if (transactionPool == null) {
+                transactionPool = new TransactionConnectionPool(
+                    connection.host(), connection.port(), commandTimeout,
+                    connection.protocol(), connection.username(), connection.password(),
+                    connection.clientName(), transactionPoolMaxSize,
+                    builder.transactionAcquireTimeout, builder.transactionIdleTimeout
+                );
+            }
+            return new BobaStrawTransaction(this, transactionPool.acquire());
+        }
+    }
+
+    public BobaStrawPubSub pubSub() {
+        ensureClientOpen();
+        return new BobaStrawPubSub(this);
+    }
+
+    private void ensureClientOpen() {
+        if (closed) {
+            throw new BobaStrawConnectionException("Client is closed");
+        }
     }
 
     public CompletionStage<RespValue> executeAsync(String command, String... arguments) {
+        return executeOn(sharedConnection(), command, arguments);
+    }
+
+    private synchronized NioConnection sharedConnection() {
+        if (closed) {
+            throw new BobaStrawConnectionException("Client is closed");
+        }
+        if (connection.isOpen()) {
+            return connection;
+        }
+        connection = createConnection(
+            connection.host(), connection.port(), commandTimeout,
+            connection.protocol(), connection.username(), connection.password(),
+            connection.clientName(), connection.idlePingInterval()
+        );
+        return connection;
+    }
+
+    private static NioConnection createConnection(
+        String host,
+        int port,
+        Duration timeout,
+        ProtocolVersion protocol,
+        String username,
+        String password,
+        String clientName,
+        Duration idlePingInterval
+    ) {
+        return new NioConnection(host, port, timeout, protocol, username, password, clientName,
+            null, idlePingInterval);
+    }
+
+    CompletionStage<RespValue> executeOn(NioConnection target, String command, String... arguments) {
         String[] all = new String[arguments.length + 1];
         all[0] = command;
         System.arraycopy(arguments, 0, all, 1, arguments.length);
-        CompletionStage<RespValue> operation = connection.execute(all);
+        CompletionStage<RespValue> operation = target.execute(all);
         java.util.concurrent.CompletableFuture<RespValue> result =
             new java.util.concurrent.CompletableFuture<RespValue>();
         operation.whenComplete((value, error) -> {
@@ -82,6 +142,63 @@ public final class BobaStrawClient implements AutoCloseable {
             )
         ), commandTimeout.toNanos(), TimeUnit.NANOSECONDS);
         return result;
+    }
+
+    CompletionStage<List<RespValue>> executeBatch(List<String[]> commands) {
+        CompletionStage<List<RespValue>> operation = sharedConnection().executeBatch(commands);
+        java.util.concurrent.CompletableFuture<List<RespValue>> result =
+            new java.util.concurrent.CompletableFuture<List<RespValue>>();
+        operation.whenComplete((value, error) -> {
+            if (error == null) {
+                result.complete(value);
+            } else {
+                result.completeExceptionally(error);
+            }
+        });
+        TIMEOUTS.schedule(() -> result.completeExceptionally(
+            new BobaStrawCommandTimeoutException(
+                "Pipeline timed out; commands may have been executed by Redis",
+                null
+            )
+        ), commandTimeout.toNanos(), TimeUnit.NANOSECONDS);
+        return result;
+    }
+
+    private NioConnection openDedicatedConnection() {
+        NioConnection dedicated = new NioConnection(
+            connection.host(), connection.port(), commandTimeout,
+            connection.protocol(), connection.username(), connection.password(),
+            connection.clientName()
+        );
+        dedicatedConnections.add(dedicated);
+        return dedicated;
+    }
+
+    NioConnection openPubSubConnection(java.util.function.Consumer<RespValue> listener) {
+        NioConnection dedicated = new NioConnection(
+            connection.host(), connection.port(), commandTimeout,
+            connection.protocol(), connection.username(), connection.password(),
+            connection.clientName(), listener, connection.idlePingInterval()
+        );
+        dedicatedConnections.add(dedicated);
+        return dedicated;
+    }
+
+    void closeDedicated(NioConnection dedicated) {
+        dedicatedConnections.remove(dedicated);
+        dedicated.close();
+    }
+
+    void releaseTransaction(NioConnection transaction, boolean healthy) {
+        synchronized (this) {
+            if (transactionPool == null) {
+                transaction.close();
+            } else if (healthy) {
+                transactionPool.release(transaction);
+            } else {
+                transactionPool.destroy(transaction);
+            }
+        }
     }
 
     <T> T await(CompletionStage<T> result) {
@@ -106,7 +223,20 @@ public final class BobaStrawClient implements AutoCloseable {
 
     @Override
     public void close() {
+        closed = true;
         connection.close();
+        synchronized (this) {
+            if (transactionPool != null) {
+                transactionPool.close();
+                transactionPool = null;
+            }
+        }
+        synchronized (dedicatedConnections) {
+            for (NioConnection dedicated : dedicatedConnections) {
+                dedicated.close();
+            }
+            dedicatedConnections.clear();
+        }
     }
 
     public static final class Builder {
@@ -117,6 +247,10 @@ public final class BobaStrawClient implements AutoCloseable {
         private String username;
         private String password;
         private String clientName;
+        private int transactionPoolMaxSize = 8;
+        private Duration transactionAcquireTimeout = Duration.ofSeconds(1);
+        private Duration transactionIdleTimeout = Duration.ofMinutes(1);
+        private Duration idlePingInterval = Duration.ZERO;
 
         public Builder uri(String value) {
             URI uri = URI.create(value);
@@ -170,6 +304,38 @@ public final class BobaStrawClient implements AutoCloseable {
 
         public Builder clientName(String value) {
             this.clientName = value;
+            return this;
+        }
+
+        public Builder transactionPoolMaxSize(int value) {
+            if (value < 1) {
+                throw new IllegalArgumentException("transactionPoolMaxSize must be positive");
+            }
+            this.transactionPoolMaxSize = value;
+            return this;
+        }
+
+        public Builder transactionAcquireTimeout(Duration value) {
+            if (value == null || value.isNegative() || value.isZero()) {
+                throw new IllegalArgumentException("transactionAcquireTimeout must be positive");
+            }
+            this.transactionAcquireTimeout = value;
+            return this;
+        }
+
+        public Builder transactionIdleTimeout(Duration value) {
+            if (value == null || value.isNegative() || value.isZero()) {
+                throw new IllegalArgumentException("transactionIdleTimeout must be positive");
+            }
+            this.transactionIdleTimeout = value;
+            return this;
+        }
+
+        public Builder idlePingInterval(Duration value) {
+            if (value == null || value.isNegative()) {
+                throw new IllegalArgumentException("idlePingInterval must not be negative");
+            }
+            this.idlePingInterval = value;
             return this;
         }
 
