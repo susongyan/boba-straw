@@ -112,7 +112,8 @@
 - [ ] 通用 ConnectionFactory
 - [ ] 取消传播、断线检测和有界重连
 - [ ] 未发送/已发送请求的失败分类
-- [ ] byte[] Codec、自定义 Codec SPI
+- [~] byte[] 基础 RESP 编码和 Raw API
+- [ ] String/ByteArray Codec 及自定义 Codec SPI
 - [ ] Stream、Bitmap、HyperLogLog、EVALSHA、Server/ACL 命令
 - [ ] JDK SSLEngine TLS
 - [ ] Sentinel 主节点发现和切换感知

@@ -30,7 +30,7 @@ public final class BobaStrawPubSub {
                 }
             }
         });
-        return client.executeOn(connection, "SUBSCRIBE", channel)
+        CompletionStage<BobaStrawSubscription> subscription = client.executeOn(connection, "SUBSCRIBE", channel)
             .thenApply(ignored -> new BobaStrawSubscription() {
                 @Override
                 public void close() {
@@ -38,6 +38,12 @@ public final class BobaStrawPubSub {
                         .whenComplete((value, error) -> client.closeDedicated(connection));
                 }
             });
+        subscription.whenComplete((value, error) -> {
+            if (error instanceof java.util.concurrent.CancellationException) {
+                client.closeDedicated(connection);
+            }
+        });
+        return subscription;
     }
 
     public CompletionStage<BobaStrawSubscription> psubscribe(
@@ -53,7 +59,7 @@ public final class BobaStrawPubSub {
                 }
             }
         });
-        return client.executeOn(connection, "PSUBSCRIBE", pattern)
+        CompletionStage<BobaStrawSubscription> subscription = client.executeOn(connection, "PSUBSCRIBE", pattern)
             .thenApply(ignored -> new BobaStrawSubscription() {
                 @Override
                 public void close() {
@@ -61,5 +67,11 @@ public final class BobaStrawPubSub {
                         .whenComplete((value, error) -> client.closeDedicated(connection));
                 }
             });
+        subscription.whenComplete((value, error) -> {
+            if (error instanceof java.util.concurrent.CancellationException) {
+                client.closeDedicated(connection);
+            }
+        });
+        return subscription;
     }
 }

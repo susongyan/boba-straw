@@ -104,7 +104,60 @@ public final class NioConnection implements AutoCloseable {
     }
 
     public CompletionStage<RespValue> execute(String[] command) {
-        return ready.thenCompose(ignored -> executeConnected(command));
+        final java.util.concurrent.atomic.AtomicReference<Request> requestRef =
+            new java.util.concurrent.atomic.AtomicReference<Request>();
+        final CompletableFuture<RespValue> result = new CompletableFuture<RespValue>();
+        ready.whenComplete((ignored, error) -> {
+            if (error != null) {
+                result.completeExceptionally(error);
+                return;
+            }
+            Request request = enqueue(command);
+            requestRef.set(request);
+            request.future.whenComplete((value, requestError) -> {
+                if (requestError == null) {
+                    result.complete(value);
+                } else {
+                    result.completeExceptionally(requestError);
+                }
+            });
+        });
+        result.whenComplete((value, error) -> {
+            if (result.isCancelled()) {
+                Request request = requestRef.get();
+                if (request != null) {
+                    cancel(request);
+                }
+            }
+        });
+        return result;
+    }
+
+    public CompletionStage<RespValue> execute(byte[][] command) {
+        final java.util.concurrent.atomic.AtomicReference<Request> requestRef =
+            new java.util.concurrent.atomic.AtomicReference<Request>();
+        final CompletableFuture<RespValue> result = new CompletableFuture<RespValue>();
+        ready.whenComplete((ignored, error) -> {
+            if (error != null) {
+                result.completeExceptionally(error);
+                return;
+            }
+            Request request = enqueue(command);
+            requestRef.set(request);
+            request.future.whenComplete((value, requestError) -> {
+                if (requestError == null) {
+                    result.complete(value);
+                } else {
+                    result.completeExceptionally(requestError);
+                }
+            });
+        });
+        result.whenComplete((value, error) -> {
+            if (result.isCancelled() && requestRef.get() != null) {
+                cancel(requestRef.get());
+            }
+        });
+        return result;
     }
 
     public CompletionStage<List<RespValue>> executeBatch(List<String[]> commands) {
@@ -126,13 +179,21 @@ public final class NioConnection implements AutoCloseable {
                 }
             }
             CompletableFuture<?>[] all = futures.toArray(new CompletableFuture<?>[futures.size()]);
-            return CompletableFuture.allOf(all).thenApply(ignoredAgain -> {
+            CompletableFuture<List<RespValue>> aggregate = CompletableFuture.allOf(all).thenApply(ignoredAgain -> {
                 List<RespValue> values = new ArrayList<RespValue>(futures.size());
                 for (CompletableFuture<RespValue> future : futures) {
                     values.add(future.join());
                 }
                 return values;
             });
+            aggregate.whenComplete((value, error) -> {
+                if (aggregate.isCancelled()) {
+                    for (CompletableFuture<RespValue> future : futures) {
+                        future.cancel(false);
+                    }
+                }
+            });
+            return aggregate;
         });
     }
 
@@ -169,18 +230,40 @@ public final class NioConnection implements AutoCloseable {
     }
 
     private CompletionStage<RespValue> executeConnected(String[] command) {
-        Request request = new Request(ByteBuffer.wrap(RespCodec.encodeCommand(command)));
+        return enqueue(command).future;
+    }
+
+    private Request enqueue(String[] command) {
+        return enqueue(RespCodec.encodeCommand(command));
+    }
+
+    private Request enqueue(byte[][] command) {
+        return enqueue(RespCodec.encodeCommand(command));
+    }
+
+    private Request enqueue(byte[] encoded) {
+        Request request = new Request(ByteBuffer.wrap(encoded));
         synchronized (lock) {
             if (closed) {
                 request.future.completeExceptionally(new BobaStrawConnectionException("Client is closed"));
-                return request.future;
+                return request;
             }
             outbound.add(request);
             if (selector != null) {
                 selector.wakeup();
             }
         }
-        return request.future;
+        return request;
+    }
+
+    private void cancel(Request request) {
+        synchronized (lock) {
+            if (outbound.remove(request)) {
+                request.future.completeExceptionally(new java.util.concurrent.CancellationException());
+            } else {
+                request.cancelled = true;
+            }
+        }
     }
 
     private void eventLoop() {
@@ -396,6 +479,9 @@ public final class NioConnection implements AutoCloseable {
         if (request == null) {
             throw new IOException("Received an unsolicited Redis response");
         }
+        if (request.cancelled) {
+            return;
+        }
         if (value instanceof RespValue.Error) {
             request.future.completeExceptionally(
                 new BobaStrawConnectionException(((RespValue.Error) value).message)
@@ -474,6 +560,7 @@ public final class NioConnection implements AutoCloseable {
     private static final class Request {
         private final ByteBuffer buffer;
         private final CompletableFuture<RespValue> future = new CompletableFuture<RespValue>();
+        private volatile boolean cancelled;
 
         private Request(ByteBuffer buffer) {
             this.buffer = buffer;

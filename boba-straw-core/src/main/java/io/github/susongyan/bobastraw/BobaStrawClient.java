@@ -10,6 +10,8 @@ import java.util.concurrent.CompletionStage;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.Set;
 import java.util.Collections;
 import java.util.HashSet;
@@ -33,6 +35,9 @@ public final class BobaStrawClient implements AutoCloseable {
     private final Set<NioConnection> dedicatedConnections =
         Collections.synchronizedSet(new HashSet<NioConnection>());
     private volatile boolean closed;
+    private final ScheduledFuture<?> reconnectTask;
+    private final AtomicLong connectionCreations = new AtomicLong();
+    private final AtomicLong reconnects = new AtomicLong();
     private final int transactionPoolMaxSize;
     private TransactionConnectionPool transactionPool;
 
@@ -41,6 +46,20 @@ public final class BobaStrawClient implements AutoCloseable {
         this.connection = createConnection(builder.host, builder.port, builder.commandTimeout,
             builder.protocolVersion, builder.username, builder.password, builder.clientName,
             builder.idlePingInterval);
+        reconnectTask = builder.reconnectInterval.isZero() ? null : TIMEOUTS.scheduleAtFixedRate(() -> {
+            if (!closed && !connection.isOpen()) {
+                synchronized (this) {
+                    if (!closed && !connection.isOpen()) {
+                        connection = createConnection(
+                            connection.host(), connection.port(), commandTimeout,
+                            connection.protocol(), connection.username(), connection.password(),
+                            connection.clientName(), connection.idlePingInterval()
+                        );
+                        reconnects.incrementAndGet();
+                    }
+                }
+            }
+        }, builder.reconnectInterval.toMillis(), builder.reconnectInterval.toMillis(), TimeUnit.MILLISECONDS);
         this.transactionPoolMaxSize = builder.transactionPoolMaxSize;
         this.sync = new BobaStrawSyncCommands(this);
         this.async = new BobaStrawAsyncCommands(this);
@@ -82,6 +101,14 @@ public final class BobaStrawClient implements AutoCloseable {
         return new BobaStrawPubSub(this);
     }
 
+    public long connectionCreations() {
+        return connectionCreations.get();
+    }
+
+    public long reconnects() {
+        return reconnects.get();
+    }
+
     private void ensureClientOpen() {
         if (closed) {
             throw new BobaStrawConnectionException("Client is closed");
@@ -90,6 +117,28 @@ public final class BobaStrawClient implements AutoCloseable {
 
     public CompletionStage<RespValue> executeAsync(String command, String... arguments) {
         return executeOn(sharedConnection(), command, arguments);
+    }
+
+    public CompletionStage<RespValue> executeBinaryAsync(byte[] command, byte[]... arguments) {
+        byte[][] all = new byte[arguments.length + 1][];
+        all[0] = command;
+        System.arraycopy(arguments, 0, all, 1, arguments.length);
+        CompletionStage<RespValue> operation = sharedConnection().execute(all);
+        java.util.concurrent.CompletableFuture<RespValue> result =
+            new java.util.concurrent.CompletableFuture<RespValue>();
+        operation.whenComplete((value, error) -> {
+            if (error == null) {
+                result.complete(value);
+            } else {
+                result.completeExceptionally(error);
+            }
+        });
+        result.whenComplete((value, error) -> {
+            if (result.isCancelled()) {
+                operation.toCompletableFuture().cancel(false);
+            }
+        });
+        return result;
     }
 
     private synchronized NioConnection sharedConnection() {
@@ -135,12 +184,18 @@ public final class BobaStrawClient implements AutoCloseable {
                 result.completeExceptionally(error);
             }
         });
-        TIMEOUTS.schedule(() -> result.completeExceptionally(
-            new BobaStrawCommandTimeoutException(
-                "Command timed out; it may have been executed by Redis",
-                null
-            )
-        ), commandTimeout.toNanos(), TimeUnit.NANOSECONDS);
+        result.whenComplete((value, error) -> {
+            if (result.isCancelled()) {
+                operation.toCompletableFuture().cancel(false);
+            }
+        });
+        TIMEOUTS.schedule(() -> {
+            if (result.completeExceptionally(new BobaStrawCommandTimeoutException(
+                "Command timed out; it may have been executed by Redis", null
+            ))) {
+                operation.toCompletableFuture().cancel(false);
+            }
+        }, commandTimeout.toNanos(), TimeUnit.NANOSECONDS);
         return result;
     }
 
@@ -157,8 +212,7 @@ public final class BobaStrawClient implements AutoCloseable {
         });
         TIMEOUTS.schedule(() -> result.completeExceptionally(
             new BobaStrawCommandTimeoutException(
-                "Pipeline timed out; commands may have been executed by Redis",
-                null
+                "Pipeline timed out; commands may have been executed by Redis", null
             )
         ), commandTimeout.toNanos(), TimeUnit.NANOSECONDS);
         return result;
@@ -224,6 +278,9 @@ public final class BobaStrawClient implements AutoCloseable {
     @Override
     public void close() {
         closed = true;
+        if (reconnectTask != null) {
+            reconnectTask.cancel(false);
+        }
         connection.close();
         synchronized (this) {
             if (transactionPool != null) {
@@ -251,6 +308,7 @@ public final class BobaStrawClient implements AutoCloseable {
         private Duration transactionAcquireTimeout = Duration.ofSeconds(1);
         private Duration transactionIdleTimeout = Duration.ofMinutes(1);
         private Duration idlePingInterval = Duration.ZERO;
+        private Duration reconnectInterval = Duration.ofSeconds(1);
 
         public Builder uri(String value) {
             URI uri = URI.create(value);
@@ -336,6 +394,14 @@ public final class BobaStrawClient implements AutoCloseable {
                 throw new IllegalArgumentException("idlePingInterval must not be negative");
             }
             this.idlePingInterval = value;
+            return this;
+        }
+
+        public Builder reconnectInterval(Duration value) {
+            if (value == null || value.isNegative() || value.isZero()) {
+                throw new IllegalArgumentException("reconnectInterval must be positive");
+            }
+            this.reconnectInterval = value;
             return this;
         }
 

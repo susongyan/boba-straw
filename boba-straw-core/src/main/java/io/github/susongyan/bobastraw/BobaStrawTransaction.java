@@ -7,6 +7,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.CancellationException;
 
 /** MULTI/EXEC helper backed by a connection dedicated to this transaction. */
 public final class BobaStrawTransaction {
@@ -52,7 +53,9 @@ public final class BobaStrawTransaction {
         }
         return chain.thenCompose(ignored -> client.executeOn(connection, "EXEC"))
             .thenApply(BobaStrawTransaction::arrayResult)
-            .whenComplete((value, error) -> client.releaseTransaction(connection, error == null));
+            .whenComplete((value, error) -> client.releaseTransaction(
+                connection, error == null && !(error instanceof CancellationException)
+            ));
     }
 
     public CompletionStage<RespValue> discard() {

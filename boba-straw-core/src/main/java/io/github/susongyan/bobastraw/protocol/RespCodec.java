@@ -13,11 +13,18 @@ public final class RespCodec {
     }
 
     public static byte[] encodeCommand(String[] parts) {
+        byte[][] binary = new byte[parts.length][];
+        for (int index = 0; index < parts.length; index++) {
+            binary[index] = parts[index].getBytes(StandardCharsets.UTF_8);
+        }
+        return encodeCommand(binary);
+    }
+
+    public static byte[] encodeCommand(byte[][] parts) {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         writeAscii(out, "*" + parts.length + "\r\n");
 
-        for (String part : parts) {
-            byte[] bytes = part.getBytes(StandardCharsets.UTF_8);
+        for (byte[] bytes : parts) {
             writeAscii(out, "$" + bytes.length + "\r\n");
             out.write(bytes, 0, bytes.length);
             writeAscii(out, "\r\n");
