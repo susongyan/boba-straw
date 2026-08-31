@@ -52,4 +52,17 @@ class RespCodecTest {
         assertEquals("hello", verbatim.asString());
         assertEquals("12345678901234567890", ((RespValue.BigNumber) decoder.poll()).value);
     }
+
+    @Test
+    void encodesBinaryCommandArgumentsWithoutTextConversion() {
+        byte[] encoded = RespCodec.encodeCommand(new byte[][] {
+            new byte[] { 'S', 'E', 'T' },
+            new byte[] { 0, 1, (byte) 0xff }
+        });
+        assertEquals('*', encoded[0]);
+        assertTrue(new String(encoded, StandardCharsets.ISO_8859_1)
+            .contains("$3\r\nSET\r\n$3\r\n"));
+        assertEquals(0, encoded[17]);
+        assertEquals((byte) 0xff, encoded[19]);
+    }
 }

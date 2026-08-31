@@ -21,7 +21,7 @@ public final class TransactionConnectionPool implements AutoCloseable {
     private final int maxSize;
     private final Duration acquireTimeout;
     private final Duration idleTimeout;
-    private final Deque<NioConnection> idle = new ArrayDeque<NioConnection>();
+    private final Deque<IdleConnection> idle = new ArrayDeque<IdleConnection>();
     private final Set<NioConnection> active = new HashSet<NioConnection>();
     private int created;
     private boolean closed;

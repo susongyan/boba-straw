@@ -39,6 +39,8 @@ public final class BobaStrawClient implements AutoCloseable {
     private final AtomicLong connectionCreations = new AtomicLong();
     private final AtomicLong reconnects = new AtomicLong();
     private final int transactionPoolMaxSize;
+    private final Duration transactionAcquireTimeout;
+    private final Duration transactionIdleTimeout;
     private TransactionConnectionPool transactionPool;
 
     private BobaStrawClient(Builder builder) {
@@ -61,6 +63,8 @@ public final class BobaStrawClient implements AutoCloseable {
             }
         }, builder.reconnectInterval.toMillis(), builder.reconnectInterval.toMillis(), TimeUnit.MILLISECONDS);
         this.transactionPoolMaxSize = builder.transactionPoolMaxSize;
+        this.transactionAcquireTimeout = builder.transactionAcquireTimeout;
+        this.transactionIdleTimeout = builder.transactionIdleTimeout;
         this.sync = new BobaStrawSyncCommands(this);
         this.async = new BobaStrawAsyncCommands(this);
     }
@@ -77,6 +81,10 @@ public final class BobaStrawClient implements AutoCloseable {
         return async;
     }
 
+    public BobaStrawBinaryCommands binary() {
+        return new BobaStrawBinaryCommands(this);
+    }
+
     public BobaStrawPipeline pipeline() {
         return new BobaStrawPipeline(this);
     }
@@ -89,7 +97,7 @@ public final class BobaStrawClient implements AutoCloseable {
                     connection.host(), connection.port(), commandTimeout,
                     connection.protocol(), connection.username(), connection.password(),
                     connection.clientName(), transactionPoolMaxSize,
-                    builder.transactionAcquireTimeout, builder.transactionIdleTimeout
+                    transactionAcquireTimeout, transactionIdleTimeout
                 );
             }
             return new BobaStrawTransaction(this, transactionPool.acquire());
