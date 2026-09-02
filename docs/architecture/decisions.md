@@ -16,6 +16,10 @@ The client does not automatically retry commands. A timeout or disconnect after 
 
 普通命令默认使用每个 Redis 节点一个共享的 NIO 多路复用连接，不要求业务配置连接池大小。事务、Pub/Sub 和阻塞命令使用独占连接；未来只为这些状态型场景提供可选专用连接池。Cluster 模式按节点分别维护共享连接。
 
+网络线程、连接状态所有权、取消语义和性能演进见
+[`network-model.md`](network-model.md)。该文档规定连接内状态最终由所属 EventLoop
+独占；命令取消后仍必须保留已发送请求的响应占位。
+
 ## Current delivery boundary
 
 The initial implementation is standalone only. Public topology promises must not be documented as supported until Sentinel and Cluster routing are implemented and tested.

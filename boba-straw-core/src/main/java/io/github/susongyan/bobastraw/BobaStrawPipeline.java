@@ -34,8 +34,21 @@ public final class BobaStrawPipeline {
         if (!executed.compareAndSet(false, true)) {
             throw new IllegalStateException("Pipeline has already been executed");
         }
-        return client.executeBatch(commands)
-            .thenApply(values -> Collections.unmodifiableList(new ArrayList<RespValue>(values)));
+        CompletionStage<List<RespValue>> operation = client.executeBatch(commands);
+        CompletableFuture<List<RespValue>> result = new CompletableFuture<List<RespValue>>();
+        operation.whenComplete((values, error) -> {
+            if (error != null) {
+                result.completeExceptionally(error);
+            } else {
+                result.complete(Collections.unmodifiableList(new ArrayList<RespValue>(values)));
+            }
+        });
+        result.whenComplete((values, error) -> {
+            if (result.isCancelled()) {
+                operation.toCompletableFuture().cancel(false);
+            }
+        });
+        return result;
     }
 
 }

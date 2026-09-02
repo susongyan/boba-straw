@@ -37,9 +37,9 @@ public final class BobaStrawPubSub {
                     client.executeOn(connection, "UNSUBSCRIBE", channel)
                         .whenComplete((value, error) -> client.closeDedicated(connection));
                 }
-            });
+        });
         subscription.whenComplete((value, error) -> {
-            if (error instanceof java.util.concurrent.CancellationException) {
+            if (error != null) {
                 client.closeDedicated(connection);
             }
         });
@@ -66,9 +66,9 @@ public final class BobaStrawPubSub {
                     client.executeOn(connection, "PUNSUBSCRIBE", pattern)
                         .whenComplete((value, error) -> client.closeDedicated(connection));
                 }
-            });
+        });
         subscription.whenComplete((value, error) -> {
-            if (error instanceof java.util.concurrent.CancellationException) {
+            if (error != null) {
                 client.closeDedicated(connection);
             }
         });

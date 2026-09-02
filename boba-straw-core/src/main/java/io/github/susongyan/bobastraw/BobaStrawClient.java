@@ -218,11 +218,18 @@ public final class BobaStrawClient implements AutoCloseable {
                 result.completeExceptionally(error);
             }
         });
-        TIMEOUTS.schedule(() -> result.completeExceptionally(
-            new BobaStrawCommandTimeoutException(
+        result.whenComplete((value, error) -> {
+            if (result.isCancelled()) {
+                operation.toCompletableFuture().cancel(false);
+            }
+        });
+        TIMEOUTS.schedule(() -> {
+            if (result.completeExceptionally(new BobaStrawCommandTimeoutException(
                 "Pipeline timed out; commands may have been executed by Redis", null
-            )
-        ), commandTimeout.toNanos(), TimeUnit.NANOSECONDS);
+            ))) {
+                operation.toCompletableFuture().cancel(false);
+            }
+        }, commandTimeout.toNanos(), TimeUnit.NANOSECONDS);
         return result;
     }
 
@@ -240,7 +247,7 @@ public final class BobaStrawClient implements AutoCloseable {
         NioConnection dedicated = new NioConnection(
             connection.host(), connection.port(), commandTimeout,
             connection.protocol(), connection.username(), connection.password(),
-            connection.clientName(), listener, connection.idlePingInterval()
+            connection.clientName(), listener, Duration.ZERO
         );
         dedicatedConnections.add(dedicated);
         return dedicated;
