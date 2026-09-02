@@ -31,8 +31,7 @@ public final class BobaStrawClusterClient implements AutoCloseable {
         this.username = builder.username;
         this.password = builder.password;
         this.clientName = builder.clientName;
-        Node seed = node(builder.host, builder.port);
-        refresh(seed);
+        bootstrap(builder.seeds);
     }
 
     public static Builder builder() {
@@ -103,6 +102,28 @@ public final class BobaStrawClusterClient implements AutoCloseable {
         }
     }
 
+    private void bootstrap(List<Seed> configuredSeeds) {
+        List<Seed> seeds = new ArrayList<Seed>(configuredSeeds);
+        Collections.shuffle(seeds);
+        RuntimeException lastFailure = null;
+        for (Seed seed : seeds) {
+            Node candidate = node(seed.host, seed.port);
+            try {
+                refresh(candidate);
+                return;
+            } catch (RuntimeException error) {
+                lastFailure = error;
+                remove(candidate, seed.host, seed.port);
+            }
+        }
+        if (lastFailure == null) {
+            throw new BobaStrawConnectionException("At least one Redis Cluster seed is required");
+        }
+        throw new BobaStrawConnectionException(
+            "Could not discover Redis Cluster slots from any configured seed", lastFailure
+        );
+    }
+
     private Node node(String host, int port) {
         String id = host + ":" + port;
         synchronized (lock) {
@@ -116,6 +137,16 @@ public final class BobaStrawClusterClient implements AutoCloseable {
             nodes.put(id, created);
             return created;
         }
+    }
+
+    private void remove(Node node, String host, int port) {
+        synchronized (lock) {
+            String id = host + ":" + port;
+            if (nodes.get(id) == node) {
+                nodes.remove(id);
+            }
+        }
+        node.connection.close();
     }
 
     private static String[] join(String command, String[] arguments) {
@@ -159,18 +190,56 @@ public final class BobaStrawClusterClient implements AutoCloseable {
         }
     }
 
+    private static final class Seed {
+        private final String host;
+        private final int port;
+
+        private Seed(String host, int port) {
+            this.host = host;
+            this.port = port;
+        }
+    }
+
     public static final class Builder {
-        private String host = "localhost";
-        private int port = 6379;
+        private final List<Seed> seeds = new ArrayList<Seed>();
+        private boolean explicitSeeds;
         private Duration timeout = Duration.ofSeconds(2);
         private ProtocolVersion protocol = ProtocolVersion.AUTO;
         private String username;
         private String password;
         private String clientName;
 
+        private Builder() {
+            seeds.add(new Seed("localhost", 6379));
+        }
+
+        /**
+         * Adds a Cluster seed. Configure more than one seed so discovery can
+         * continue when an individual startup node is unavailable.
+         */
         public Builder seed(String host, int port) {
-            this.host = host;
-            this.port = port;
+            if (!explicitSeeds) {
+                seeds.clear();
+                explicitSeeds = true;
+            }
+            addSeed(host, port);
+            return this;
+        }
+
+        /**
+         * Replaces the seed list with {@code host:port} endpoints. Bracketed
+         * IPv6 literals such as {@code [::1]:6379} are supported.
+         */
+        public Builder seeds(String... endpoints) {
+            if (endpoints == null || endpoints.length == 0) {
+                throw new IllegalArgumentException("At least one Cluster seed is required");
+            }
+            seeds.clear();
+            explicitSeeds = true;
+            for (String endpoint : endpoints) {
+                Seed seed = parseEndpoint(endpoint);
+                addSeed(seed.host, seed.port);
+            }
             return this;
         }
 
@@ -197,6 +266,51 @@ public final class BobaStrawClusterClient implements AutoCloseable {
 
         public BobaStrawClusterClient build() {
             return new BobaStrawClusterClient(this);
+        }
+
+        private void addSeed(String host, int port) {
+            if (host == null || host.trim().isEmpty()) {
+                throw new IllegalArgumentException("Cluster seed host must not be empty");
+            }
+            if (port < 1 || port > 65535) {
+                throw new IllegalArgumentException("Cluster seed port must be between 1 and 65535");
+            }
+            seeds.add(new Seed(host, port));
+        }
+
+        private static Seed parseEndpoint(String endpoint) {
+            if (endpoint == null) {
+                throw new IllegalArgumentException("Cluster seed endpoint must not be null");
+            }
+            String value = endpoint.trim();
+            if (value.startsWith("[")) {
+                int closingBracket = value.indexOf(']');
+                if (closingBracket < 2 || closingBracket + 1 >= value.length()
+                    || value.charAt(closingBracket + 1) != ':') {
+                    throw new IllegalArgumentException("Invalid bracketed Cluster seed: " + endpoint);
+                }
+                return new Seed(
+                    value.substring(1, closingBracket),
+                    parsePort(value.substring(closingBracket + 2), endpoint)
+                );
+            }
+            int separator = value.lastIndexOf(':');
+            if (separator < 1 || separator == value.length() - 1 || value.indexOf(':') != separator) {
+                throw new IllegalArgumentException("Cluster seed must use host:port: " + endpoint);
+            }
+            return new Seed(value.substring(0, separator), parsePort(value.substring(separator + 1), endpoint));
+        }
+
+        private static int parsePort(String value, String endpoint) {
+            try {
+                int port = Integer.parseInt(value);
+                if (port < 1 || port > 65535) {
+                    throw new NumberFormatException("outside valid port range");
+                }
+                return port;
+            } catch (NumberFormatException error) {
+                throw new IllegalArgumentException("Invalid Cluster seed port: " + endpoint, error);
+            }
         }
     }
 }

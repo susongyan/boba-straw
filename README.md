@@ -6,7 +6,7 @@ Boba Straw is a lightweight, pure Java Redis and Valkey client. It uses a Java N
 
 ## Current status
 
-`0.1.0-SNAPSHOT` provides a standalone NIO client with RESP2/RESP3 negotiation and synchronous/`CompletionStage` APIs. The currently covered commands are `PING`, `GET`, `SET`, `DEL`, `EXISTS`, `EXPIRE`, `TTL`, `INCR`, Hash, List, Set and sorted-set basics. Sentinel, Cluster, TLS, Pub/Sub, transactions and scripts are not yet production-ready.
+`0.1.0-SNAPSHOT` provides a standalone NIO client with RESP2/RESP3 negotiation and synchronous/`CompletionStage` APIs. Key and String coverage includes conditional/expiring `SET`, `MGET`/`MSET`, counters, range and bit operations, expiry management, rename and type commands; Hash, List, Set and sorted-set currently provide their basic operations. Sentinel, Cluster, TLS, Pub/Sub, transactions and scripts are not yet production-ready.
 
 ```java
 try (BobaStrawClient client = BobaStrawClient.builder().uri("redis://localhost:6379").build()) {
@@ -43,6 +43,14 @@ BobaStrawClient.builder()
     .transactionPoolMaxSize(8)
     .transactionAcquireTimeout(Duration.ofSeconds(1))
     .transactionIdleTimeout(Duration.ofMinutes(1))
+    .build();
+```
+
+Cluster 启动发现可同时配置多个 seed。每次构建会随机化本次发现顺序，并依次执行 `CLUSTER SLOTS`；任一 seed 成功即可建立 slot 路由：
+
+```java
+BobaStrawClusterClient cluster = BobaStrawClusterClient.builder()
+    .seeds("redis-1:6379", "redis-2:6379", "redis-3:6379")
     .build();
 ```
 
