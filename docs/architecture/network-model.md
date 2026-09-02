@@ -17,9 +17,12 @@
 取消处理收敛到该连接自己的 EventLoop。业务线程只提交任务，因此不会直接与网络
 写入竞争队列。
 
-当前仍是“一条连接一个 Selector 线程”；`BobaStrawClientResources` 和共享
-`NioEventLoopGroup` 是阶段 2 的目标，尚未标记为已实现。读缓冲复用、gathering
-write、真正的 RESP 状态机、背压和回调隔离也仍在后续阶段。
+阶段 2 已将物理连接迁移到 `BobaStrawClientResources` 持有的共享
+`NioEventLoopGroup`。Standalone、事务、Pub/Sub 和 Cluster 节点连接均通过统一
+factory 分配给固定 EventLoop；连接创建后不迁移。默认 Client 自建并拥有一个 loop，
+应用可显式传入 Resources 来让多个 Client 共享有限数量的 Selector 线程。
+
+读缓冲复用、gathering write、真正的 RESP 状态机、背压和回调隔离仍在后续阶段。
 
 ## 目标结构
 
@@ -51,7 +54,22 @@ per-event-loop MPSC task queue -- wakeup --> NioEventLoop
 
 `BobaStrawClientResources` 提供可共享的 `NioEventLoopGroup`。未传入
 Resources 时，Client 创建并拥有它；传入 Resources 时由调用方在应用关闭时
-统一关闭。连接分配 EventLoop 后不迁移。
+统一关闭。关闭一个使用外部 Resources 的 Client 只关闭该 Client 的物理连接；不会
+关闭其他 Client 或 Resources。关闭 Resources 时，group 拒绝新任务、关闭所有已注册
+连接并使未完成请求终止；不会自动重试。
+
+```java
+try (
+    BobaStrawClientResources resources = BobaStrawClientResources.builder()
+        .eventLoopThreads(2)
+        .build();
+    BobaStrawClient orders = BobaStrawClient.builder()
+        .resources(resources)
+        .uri("redis://orders-redis:6379")
+        .build()) {
+    // orders closes before resources, in reverse declaration order
+}
+```
 
 ## 命令执行流程
 
@@ -120,9 +138,10 @@ QUEUED -> CANCELLED
 
 ## 网络、协议与分发
 
-EventLoop 单轮按以下顺序工作：排空跨线程任务、按最近 deadline 等待
-Selector、处理 connect/read/write、处理定时任务。每轮读写都有字节预算，避免
-超大 Pipeline 长时间独占线程。
+阶段 3 的目标 EventLoop 单轮按以下顺序工作：排空跨线程任务、按最近 deadline 等待
+Selector、处理 connect/read/write、处理定时任务，并对每轮读写施加字节预算，避免
+超大 Pipeline 长时间独占线程。当前阶段 2 尚未加入任务、读或写预算；高负载连接可能
+暂时占用同组 loop，这也是阶段 3 未标记为完成的原因。
 
 ```mermaid
 flowchart TD
@@ -182,3 +201,16 @@ flowchart TD
 - 连接在任何命令字节写出前失败时返回 `BobaStrawCommandNotSentException`；写出
   过任意字节后失败时返回 `BobaStrawCommandMayHaveExecutedException`；两种情况均不重试。
 - 以上路径由回环假 Redis 测试覆盖，并通过完整 `mvn test` 回归。
+
+### 阶段 2 验收（已完成）
+
+- `BobaStrawClientResources` 可配置固定数量的 selector 线程；默认 Client 资源使用
+  一个线程，外部 Resources 可被多个 Client 共享。
+- 一个 `NioConnection` 固定绑定到一个 loop。连接的 connect、SelectionKey、读写、
+  握手、空闲检查、关闭及 FIFO 队列仍只由该 loop 修改。
+- Standalone 重连、事务池、Pub/Sub 专用连接、Cluster seed/拓扑节点连接均经由
+  `NioConnectionFactory` 创建，不能回退到“一连接一线程”。
+- 单条连接断开只终止该连接；同一 EventLoop 上的其他连接继续服务。外部 Resources
+  的 Client 相互关闭隔离；关闭 Resources 会使在途请求终止并拒绝后续命令。
+- 上述生命周期语义由 `BobaStrawClientResourcesTest` 与既有协议/Cluster 回归覆盖，
+  并通过完整 `mvn test`。

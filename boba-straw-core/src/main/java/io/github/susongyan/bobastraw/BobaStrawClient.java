@@ -1,6 +1,7 @@
 package io.github.susongyan.bobastraw;
 
 import io.github.susongyan.bobastraw.internal.NioConnection;
+import io.github.susongyan.bobastraw.internal.NioConnectionFactory;
 import io.github.susongyan.bobastraw.internal.TransactionConnectionPool;
 import io.github.susongyan.bobastraw.protocol.RespValue;
 
@@ -29,6 +30,9 @@ public final class BobaStrawClient implements AutoCloseable {
             return thread;
         });
     private volatile NioConnection connection;
+    private final BobaStrawClientResources resources;
+    private final boolean ownsResources;
+    private final NioConnectionFactory connectionFactory;
     private final Duration commandTimeout;
     private final BobaStrawSyncCommands sync;
     private final BobaStrawAsyncCommands async;
@@ -44,14 +48,20 @@ public final class BobaStrawClient implements AutoCloseable {
     private TransactionConnectionPool transactionPool;
 
     private BobaStrawClient(Builder builder) {
+        this.ownsResources = builder.resources == null;
+        this.resources = ownsResources ? BobaStrawClientResources.builder().build() : builder.resources;
+        if (!resources.isOpen()) {
+            throw new BobaStrawConnectionException("Boba Straw client resources are closed");
+        }
+        this.connectionFactory = resources.connectionFactory();
         this.commandTimeout = builder.commandTimeout;
         this.connection = createConnection(builder.host, builder.port, builder.commandTimeout,
             builder.protocolVersion, builder.username, builder.password, builder.clientName,
             builder.idlePingInterval);
         reconnectTask = builder.reconnectInterval.isZero() ? null : TIMEOUTS.scheduleAtFixedRate(() -> {
-            if (!closed && !connection.isOpen()) {
+            if (!closed && resources.isOpen() && !connection.isOpen()) {
                 synchronized (this) {
-                    if (!closed && !connection.isOpen()) {
+                    if (!closed && resources.isOpen() && !connection.isOpen()) {
                         connection = createConnection(
                             connection.host(), connection.port(), commandTimeout,
                             connection.protocol(), connection.username(), connection.password(),
@@ -97,7 +107,7 @@ public final class BobaStrawClient implements AutoCloseable {
                     connection.host(), connection.port(), commandTimeout,
                     connection.protocol(), connection.username(), connection.password(),
                     connection.clientName(), transactionPoolMaxSize,
-                    transactionAcquireTimeout, transactionIdleTimeout
+                    transactionAcquireTimeout, transactionIdleTimeout, connectionFactory
                 );
             }
             return new BobaStrawTransaction(this, transactionPool.acquire());
@@ -120,6 +130,9 @@ public final class BobaStrawClient implements AutoCloseable {
     private void ensureClientOpen() {
         if (closed) {
             throw new BobaStrawConnectionException("Client is closed");
+        }
+        if (!resources.isOpen()) {
+            throw new BobaStrawConnectionException("Boba Straw client resources are closed");
         }
     }
 
@@ -150,9 +163,7 @@ public final class BobaStrawClient implements AutoCloseable {
     }
 
     private synchronized NioConnection sharedConnection() {
-        if (closed) {
-            throw new BobaStrawConnectionException("Client is closed");
-        }
+        ensureClientOpen();
         if (connection.isOpen()) {
             return connection;
         }
@@ -164,7 +175,7 @@ public final class BobaStrawClient implements AutoCloseable {
         return connection;
     }
 
-    private static NioConnection createConnection(
+    private NioConnection createConnection(
         String host,
         int port,
         Duration timeout,
@@ -174,7 +185,7 @@ public final class BobaStrawClient implements AutoCloseable {
         String clientName,
         Duration idlePingInterval
     ) {
-        return new NioConnection(host, port, timeout, protocol, username, password, clientName,
+        return connectionFactory.create(host, port, timeout, protocol, username, password, clientName,
             null, idlePingInterval);
     }
 
@@ -233,18 +244,9 @@ public final class BobaStrawClient implements AutoCloseable {
         return result;
     }
 
-    private NioConnection openDedicatedConnection() {
-        NioConnection dedicated = new NioConnection(
-            connection.host(), connection.port(), commandTimeout,
-            connection.protocol(), connection.username(), connection.password(),
-            connection.clientName()
-        );
-        dedicatedConnections.add(dedicated);
-        return dedicated;
-    }
-
     NioConnection openPubSubConnection(java.util.function.Consumer<RespValue> listener) {
-        NioConnection dedicated = new NioConnection(
+        ensureClientOpen();
+        NioConnection dedicated = connectionFactory.create(
             connection.host(), connection.port(), commandTimeout,
             connection.protocol(), connection.username(), connection.password(),
             connection.clientName(), listener, Duration.ZERO
@@ -309,6 +311,9 @@ public final class BobaStrawClient implements AutoCloseable {
             }
             dedicatedConnections.clear();
         }
+        if (ownsResources) {
+            resources.close();
+        }
     }
 
     public static final class Builder {
@@ -324,6 +329,7 @@ public final class BobaStrawClient implements AutoCloseable {
         private Duration transactionIdleTimeout = Duration.ofMinutes(1);
         private Duration idlePingInterval = Duration.ZERO;
         private Duration reconnectInterval = Duration.ofSeconds(1);
+        private BobaStrawClientResources resources;
 
         public Builder uri(String value) {
             URI uri = URI.create(value);
@@ -417,6 +423,14 @@ public final class BobaStrawClient implements AutoCloseable {
                 throw new IllegalArgumentException("reconnectInterval must be positive");
             }
             this.reconnectInterval = value;
+            return this;
+        }
+
+        /**
+         * Uses externally owned selector resources. Closing this client will not close them.
+         */
+        public Builder resources(BobaStrawClientResources value) {
+            this.resources = value;
             return this;
         }
 

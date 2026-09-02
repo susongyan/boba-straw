@@ -24,6 +24,7 @@
 
 - [x] 普通命令每个 Redis 节点一个共享多路复用连接
 - [x] 事务和 Pub/Sub 使用独占连接
+- [x] `BobaStrawClientResources` 共享固定数量的 Selector EventLoop
 - [~] 状态型专用连接池（事务连接池已懒加载，Pub/Sub/阻塞命令待补）
 - [~] 共享连接失效检测、下一请求懒重连和固定间隔后台重连
 - [x] 可选空闲连接 PING 健康检测
@@ -33,7 +34,7 @@
 
 - [x] 网络模型、EventLoop 所有权、取消与背压架构文档
 - [x] 阶段 1：连接队列状态收敛和取消/FIFO 安全
-- [ ] 阶段 2：共享 Selector EventLoopGroup
+- [x] 阶段 2：共享 Selector EventLoopGroup
 - [ ] 阶段 3：读缓冲复用、gathering write 与公平预算
 - [ ] 阶段 4：RESP 增量状态机与协议资源上限
 - [ ] 阶段 5：统一 deadline、背压、回调与订阅分发隔离
@@ -45,6 +46,12 @@
 `preReady`；已写入的取消请求保留响应占位；RESP3 Attribute 包裹的 Push 不得消费普通
 请求；Pub/Sub 的 RESP3 订阅确认匹配专用连接的待处理请求；连接失败会区分未发送和
 可能已执行。上述语义由本地假 Redis socket 测试覆盖，并已通过 `mvn test`。
+
+阶段 2 验收记录：`BobaStrawClientResources` 管理固定数量的共享 Selector 线程；
+Standalone、事务、Pub/Sub 和 Cluster 全部经由统一连接 factory 分配 EventLoop。
+同组单条连接失败不影响其他连接；关闭使用外部 Resources 的 Client 不关闭资源，关闭
+Resources 会终止在途请求并拒绝新命令。上述生命周期由 socket 测试覆盖，并已通过
+`mvn test`。
 
 ### 协议与连接
 

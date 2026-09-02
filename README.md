@@ -26,6 +26,28 @@ BobaStrawClient.builder()
 
 普通命令默认按每个 Redis 节点复用一个共享多路复用连接，不需要配置连接池大小。事务、Pub/Sub 和阻塞命令使用独立连接。
 
+默认每个 Client 自己管理一个 Selector EventLoop。应用中有多个 Client、Cluster 或专用连接时，
+可显式共享 `BobaStrawClientResources`；`eventLoopThreads` 是 I/O 线程数量，不是连接池大小。
+外部传入的 Resources 由应用在关闭全部 Client 后统一关闭：
+
+```java
+try (
+    BobaStrawClientResources resources = BobaStrawClientResources.builder()
+        .eventLoopThreads(2)
+        .build();
+    BobaStrawClient cache = BobaStrawClient.builder()
+        .resources(resources)
+        .uri("redis://cache:6379")
+        .build();
+    BobaStrawClient sessions = BobaStrawClient.builder()
+        .resources(resources)
+        .uri("redis://sessions:6379")
+        .build()
+) {
+    // clients close before resources, in reverse declaration order
+}
+```
+
 共享连接默认不发送主动心跳；如需检测长时间空闲连接，可启用：
 
 ```java

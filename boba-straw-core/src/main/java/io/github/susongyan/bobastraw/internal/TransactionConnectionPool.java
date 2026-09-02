@@ -21,12 +21,19 @@ public final class TransactionConnectionPool implements AutoCloseable {
     private final int maxSize;
     private final Duration acquireTimeout;
     private final Duration idleTimeout;
+    private final NioConnectionFactory connectionFactory;
+    private final NioEventLoopGroup legacyOwnedEventLoops;
     private final Deque<IdleConnection> idle = new ArrayDeque<IdleConnection>();
     private final Set<NioConnection> active = new HashSet<NioConnection>();
     private int created;
     private boolean closed;
     private final ScheduledExecutorService reaper;
 
+    /**
+     * @deprecated Internal compatibility constructor. Prefer BobaStrawClient.transaction(),
+     * which binds transaction connections to shared client resources.
+     */
+    @Deprecated
     public TransactionConnectionPool(
         String host,
         int port,
@@ -38,6 +45,59 @@ public final class TransactionConnectionPool implements AutoCloseable {
         int maxSize,
         Duration acquireTimeout,
         Duration idleTimeout
+    ) {
+        this(new NioEventLoopGroup(1), host, port, timeout, protocol, username, password,
+            clientName, maxSize, acquireTimeout, idleTimeout);
+    }
+
+    private TransactionConnectionPool(
+        NioEventLoopGroup legacyOwnedEventLoops,
+        String host,
+        int port,
+        Duration timeout,
+        io.github.susongyan.bobastraw.ProtocolVersion protocol,
+        String username,
+        String password,
+        String clientName,
+        int maxSize,
+        Duration acquireTimeout,
+        Duration idleTimeout
+    ) {
+        this(host, port, timeout, protocol, username, password, clientName, maxSize,
+            acquireTimeout, idleTimeout, new NioConnectionFactory(legacyOwnedEventLoops),
+            legacyOwnedEventLoops);
+    }
+
+    public TransactionConnectionPool(
+        String host,
+        int port,
+        Duration timeout,
+        io.github.susongyan.bobastraw.ProtocolVersion protocol,
+        String username,
+        String password,
+        String clientName,
+        int maxSize,
+        Duration acquireTimeout,
+        Duration idleTimeout,
+        NioConnectionFactory connectionFactory
+    ) {
+        this(host, port, timeout, protocol, username, password, clientName, maxSize,
+            acquireTimeout, idleTimeout, connectionFactory, null);
+    }
+
+    private TransactionConnectionPool(
+        String host,
+        int port,
+        Duration timeout,
+        io.github.susongyan.bobastraw.ProtocolVersion protocol,
+        String username,
+        String password,
+        String clientName,
+        int maxSize,
+        Duration acquireTimeout,
+        Duration idleTimeout,
+        NioConnectionFactory connectionFactory,
+        NioEventLoopGroup legacyOwnedEventLoops
     ) {
         if (maxSize < 1) {
             throw new IllegalArgumentException("maxSize must be positive");
@@ -52,6 +112,8 @@ public final class TransactionConnectionPool implements AutoCloseable {
         this.maxSize = maxSize;
         this.acquireTimeout = acquireTimeout;
         this.idleTimeout = idleTimeout;
+        this.connectionFactory = connectionFactory;
+        this.legacyOwnedEventLoops = legacyOwnedEventLoops;
         this.reaper = Executors.newSingleThreadScheduledExecutor(runnable -> {
             Thread thread = new Thread(runnable, "boba-straw-transaction-reaper");
             thread.setDaemon(true);
@@ -80,8 +142,9 @@ public final class TransactionConnectionPool implements AutoCloseable {
             }
             if (created < maxSize) {
                 created++;
-                NioConnection connection = new NioConnection(
-                    host, port, timeout, protocol, username, password, clientName
+                NioConnection connection = connectionFactory.create(
+                    host, port, timeout, protocol, username, password, clientName,
+                    null, Duration.ZERO
                 );
                 active.add(connection);
                 return connection;
@@ -121,19 +184,26 @@ public final class TransactionConnectionPool implements AutoCloseable {
     }
 
     @Override
-    public synchronized void close() {
-        closed = true;
-        while (!idle.isEmpty()) {
-            idle.removeFirst().connection.close();
-            created--;
+    public void close() {
+        NioEventLoopGroup resourcesToClose;
+        synchronized (this) {
+            closed = true;
+            while (!idle.isEmpty()) {
+                idle.removeFirst().connection.close();
+                created--;
+            }
+            for (NioConnection connection : active) {
+                connection.close();
+                created--;
+            }
+            active.clear();
+            reaper.shutdownNow();
+            notifyAll();
+            resourcesToClose = legacyOwnedEventLoops;
         }
-        for (NioConnection connection : active) {
-            connection.close();
-            created--;
+        if (resourcesToClose != null) {
+            resourcesToClose.close();
         }
-        active.clear();
-        reaper.shutdownNow();
-        notifyAll();
     }
 
     private synchronized void reapIdle() {

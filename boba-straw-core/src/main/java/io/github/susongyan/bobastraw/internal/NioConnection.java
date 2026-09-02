@@ -1,8 +1,8 @@
 package io.github.susongyan.bobastraw.internal;
 
-import io.github.susongyan.bobastraw.BobaStrawConnectionException;
 import io.github.susongyan.bobastraw.BobaStrawCommandMayHaveExecutedException;
 import io.github.susongyan.bobastraw.BobaStrawCommandNotSentException;
+import io.github.susongyan.bobastraw.BobaStrawConnectionException;
 import io.github.susongyan.bobastraw.ProtocolVersion;
 import io.github.susongyan.bobastraw.protocol.RespCodec;
 import io.github.susongyan.bobastraw.protocol.RespValue;
@@ -15,19 +15,19 @@ import java.nio.channels.Selector;
 import java.nio.channels.SocketChannel;
 import java.time.Duration;
 import java.util.ArrayDeque;
-import java.util.Iterator;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
-import java.util.concurrent.ConcurrentLinkedQueue;
-import java.util.List;
-import java.util.ArrayList;
 import java.util.function.Consumer;
 
 /** One non-blocking TCP connection with FIFO response matching. */
 public final class NioConnection implements AutoCloseable {
     private static final int READ_BUFFER_SIZE = 8192;
 
+    private final NioEventLoop eventLoop;
+    private final NioEventLoopGroup legacyOwnedEventLoops;
     private final String host;
     private final int port;
     private final Duration timeout;
@@ -39,21 +39,24 @@ public final class NioConnection implements AutoCloseable {
     private final Queue<Request> outbound = new ArrayDeque<Request>();
     private final Queue<Request> pending = new ArrayDeque<Request>();
     private final Queue<Request> preReady = new ArrayDeque<Request>();
-    private final Queue<ConnectionTask> submitted = new ConcurrentLinkedQueue<ConnectionTask>();
     private final RespCodec.Decoder decoder = new RespCodec.Decoder();
-    private final CompletableFuture<Void> ready = new CompletableFuture<Void>();
     private final Consumer<RespValue> pushListener;
 
     private volatile boolean closed;
     private volatile boolean closeRequested;
-    private volatile long lastActivityNanos = System.nanoTime();
+    private volatile BobaStrawConnectionException terminalError;
+    private long lastActivityNanos = System.nanoTime();
     private boolean healthCheckInFlight;
     private long healthCheckDeadlineNanos;
     private boolean readyForCommands;
-    private volatile BobaStrawConnectionException terminalError;
-    private volatile Selector selector;
+    private SelectionKey key;
     private SocketChannel channel;
 
+    /**
+     * @deprecated Internal compatibility constructor. Use BobaStrawClient or a shared
+     * BobaStrawClientResources-backed factory instead.
+     */
+    @Deprecated
     public NioConnection(
         String host,
         int port,
@@ -63,9 +66,15 @@ public final class NioConnection implements AutoCloseable {
         String password,
         String clientName
     ) {
-        this(host, port, timeout, requestedProtocol, username, password, clientName, null, Duration.ZERO);
+        this(new NioEventLoopGroup(1), host, port, timeout, requestedProtocol, username, password,
+            clientName, null, Duration.ZERO);
     }
 
+    /**
+     * @deprecated Internal compatibility constructor. Use BobaStrawClient or a shared
+     * BobaStrawClientResources-backed factory instead.
+     */
+    @Deprecated
     public NioConnection(
         String host,
         int port,
@@ -76,10 +85,15 @@ public final class NioConnection implements AutoCloseable {
         String clientName,
         Consumer<RespValue> pushListener
     ) {
-        this(host, port, timeout, requestedProtocol, username, password, clientName,
-            pushListener, Duration.ZERO);
+        this(new NioEventLoopGroup(1), host, port, timeout, requestedProtocol, username, password,
+            clientName, pushListener, Duration.ZERO);
     }
 
+    /**
+     * @deprecated Internal compatibility constructor. Use BobaStrawClient or a shared
+     * BobaStrawClientResources-backed factory instead.
+     */
+    @Deprecated
     public NioConnection(
         String host,
         int port,
@@ -91,6 +105,57 @@ public final class NioConnection implements AutoCloseable {
         Consumer<RespValue> pushListener,
         Duration idlePingInterval
     ) {
+        this(new NioEventLoopGroup(1), host, port, timeout, requestedProtocol, username, password,
+            clientName, pushListener, idlePingInterval);
+    }
+
+    private NioConnection(
+        NioEventLoopGroup legacyOwnedEventLoops,
+        String host,
+        int port,
+        Duration timeout,
+        ProtocolVersion requestedProtocol,
+        String username,
+        String password,
+        String clientName,
+        Consumer<RespValue> pushListener,
+        Duration idlePingInterval
+    ) {
+        this(legacyOwnedEventLoops.next(), host, port, timeout, requestedProtocol, username, password,
+            clientName, pushListener, idlePingInterval, legacyOwnedEventLoops);
+    }
+
+    NioConnection(
+        NioEventLoop eventLoop,
+        String host,
+        int port,
+        Duration timeout,
+        ProtocolVersion requestedProtocol,
+        String username,
+        String password,
+        String clientName,
+        Consumer<RespValue> pushListener,
+        Duration idlePingInterval
+    ) {
+        this(eventLoop, host, port, timeout, requestedProtocol, username, password, clientName,
+            pushListener, idlePingInterval, null);
+    }
+
+    private NioConnection(
+        NioEventLoop eventLoop,
+        String host,
+        int port,
+        Duration timeout,
+        ProtocolVersion requestedProtocol,
+        String username,
+        String password,
+        String clientName,
+        Consumer<RespValue> pushListener,
+        Duration idlePingInterval,
+        NioEventLoopGroup legacyOwnedEventLoops
+    ) {
+        this.eventLoop = eventLoop;
+        this.legacyOwnedEventLoops = legacyOwnedEventLoops;
         this.host = host;
         this.port = port;
         this.timeout = timeout;
@@ -100,15 +165,17 @@ public final class NioConnection implements AutoCloseable {
         this.clientName = clientName;
         this.pushListener = pushListener;
         this.idlePingInterval = idlePingInterval == null ? Duration.ZERO : idlePingInterval;
-
-        Thread thread = new Thread(new Runnable() {
+        submit(new ConnectionTask() {
             @Override
             public void run() {
-                eventLoop();
+                NioConnection.this.eventLoop.register(NioConnection.this);
             }
-        }, "boba-straw-nio");
-        thread.setDaemon(true);
-        thread.start();
+
+            @Override
+            public void fail(BobaStrawConnectionException error) {
+                failBeforeRegistration(error);
+            }
+        });
     }
 
     public CompletionStage<RespValue> execute(String[] command) {
@@ -199,11 +266,62 @@ public final class NioConnection implements AutoCloseable {
     }
 
     public boolean isOpen() {
-        return !closed && !closeRequested;
+        return !closed && !closeRequested && eventLoop.isOpen();
     }
 
     public Duration idlePingInterval() {
         return idlePingInterval;
+    }
+
+    void register(Selector selector) throws IOException {
+        if (closed) {
+            return;
+        }
+        channel = SocketChannel.open();
+        channel.configureBlocking(false);
+        boolean connected = channel.connect(new InetSocketAddress(host, port));
+        key = channel.register(selector, connected ? SelectionKey.OP_READ : SelectionKey.OP_CONNECT, this);
+        if (connected) {
+            startHandshake();
+        }
+    }
+
+    void onSelected(SelectionKey selectedKey) throws IOException {
+        if (closed || !selectedKey.isValid()) {
+            return;
+        }
+        if (selectedKey.isConnectable()) {
+            connect(selectedKey);
+        }
+        if (selectedKey.isWritable()) {
+            write(selectedKey);
+        }
+        if (selectedKey.isReadable()) {
+            read();
+        }
+    }
+
+    void onTick() {
+        if (closed) {
+            return;
+        }
+        armWrites();
+        checkIdle();
+    }
+
+    void onIoFailure(Throwable error) {
+        failAll(error);
+        closeResources();
+    }
+
+    void onRegistrationRejected(BobaStrawConnectionException error) {
+        failAll(error, false);
+        closeResources();
+    }
+
+    void onEventLoopShutdown(BobaStrawConnectionException error) {
+        failAll(error, false);
+        closeResources();
     }
 
     private CompletionStage<RespValue> executeConnected(String[] command) {
@@ -292,66 +410,43 @@ public final class NioConnection implements AutoCloseable {
         });
     }
 
-    private void eventLoop() {
-        try {
-            selector = Selector.open();
-            channel = SocketChannel.open();
-            channel.configureBlocking(false);
-            channel.connect(new InetSocketAddress(host, port));
-            channel.register(selector, SelectionKey.OP_CONNECT);
-
-            while (!closed) {
-                drainSubmitted();
-                if (closed) {
-                    break;
-                }
-                selector.select(100);
-                drainSubmitted();
-                if (closed) {
-                    break;
-                }
-                processSelectedKeys();
-                armWrites();
-                checkIdle();
-            }
-        } catch (Throwable error) {
-            failAll(error);
-        } finally {
-            closeResources();
-        }
-    }
-
-    private void submit(ConnectionTask task) {
+    private void submit(final ConnectionTask task) {
         BobaStrawConnectionException error = terminalError;
         if (error != null) {
             task.fail(error);
             return;
         }
         if (closeRequested) {
-            error = terminalError;
-            task.fail(error == null ? new BobaStrawConnectionException("Client is closed") : error);
+            task.fail(new BobaStrawConnectionException("Client is closed"));
             return;
         }
-        submitted.add(task);
-        error = terminalError;
-        if (error != null && submitted.remove(task)) {
-            task.fail(error);
-            return;
-        }
-        Selector current = selector;
-        if (current != null) {
-            current.wakeup();
-        }
-    }
-
-    private void drainSubmitted() {
-        ConnectionTask task;
-        while ((task = submitted.poll()) != null) {
-            if (closed) {
-                task.fail(terminalError);
-            } else {
+        eventLoop.execute(new NioEventLoop.Task() {
+            @Override
+            public void run() {
+                if (closed) {
+                    BobaStrawConnectionException error = terminalError;
+                    task.fail(error == null ? new BobaStrawConnectionException("Client is closed") : error);
+                    return;
+                }
                 task.run();
             }
+
+            @Override
+            public void reject(BobaStrawConnectionException error) {
+                task.fail(error);
+            }
+        });
+    }
+
+    private void failBeforeRegistration(BobaStrawConnectionException error) {
+        if (closed) {
+            return;
+        }
+        terminalError = error;
+        closeRequested = true;
+        closed = true;
+        if (legacyOwnedEventLoops != null) {
+            legacyOwnedEventLoops.close();
         }
     }
 
@@ -369,29 +464,9 @@ public final class NioConnection implements AutoCloseable {
         }
     }
 
-    private void processSelectedKeys() throws IOException {
-        Iterator<SelectionKey> iterator = selector.selectedKeys().iterator();
-        while (iterator.hasNext()) {
-            SelectionKey key = iterator.next();
-            iterator.remove();
-            if (!key.isValid()) {
-                continue;
-            }
-            if (key.isConnectable()) {
-                connect(key);
-            }
-            if (key.isWritable()) {
-                write(key);
-            }
-            if (key.isReadable()) {
-                read();
-            }
-        }
-    }
-
-    private void connect(SelectionKey key) throws IOException {
+    private void connect(SelectionKey selectedKey) throws IOException {
         if (channel.finishConnect()) {
-            key.interestOps(SelectionKey.OP_READ);
+            selectedKey.interestOps(SelectionKey.OP_READ);
             startHandshake();
         }
     }
@@ -402,18 +477,15 @@ public final class NioConnection implements AutoCloseable {
             return;
         }
 
-        String[] hello = helloCommand();
-        executeConnected(hello).whenComplete((response, error) -> {
+        executeConnected(helloCommand()).whenComplete((response, error) -> {
             if (error == null) {
                 activateUserCommands();
                 return;
             }
-
             if (requestedProtocol == ProtocolVersion.AUTO && isUnknownHello(error)) {
                 authenticateResp2();
                 return;
             }
-            ready.completeExceptionally(error);
             close();
         });
     }
@@ -439,7 +511,6 @@ public final class NioConnection implements AutoCloseable {
             : new String[] { "AUTH", username, password };
         executeConnected(auth).whenComplete((response, error) -> {
             if (error != null) {
-                ready.completeExceptionally(error);
                 close();
                 return;
             }
@@ -456,7 +527,6 @@ public final class NioConnection implements AutoCloseable {
             if (error == null) {
                 activateUserCommands();
             } else {
-                ready.completeExceptionally(error);
                 close();
             }
         });
@@ -467,7 +537,6 @@ public final class NioConnection implements AutoCloseable {
         while (!preReady.isEmpty()) {
             outbound.add(preReady.remove());
         }
-        ready.complete(null);
     }
 
     private boolean isUnknownHello(Throwable error) {
@@ -484,31 +553,29 @@ public final class NioConnection implements AutoCloseable {
     }
 
     private void armWrites() {
-        if (channel == null || !channel.isConnected()) {
+        if (channel == null || !channel.isConnected() || key == null || !key.isValid()) {
             return;
         }
-        SelectionKey key = channel.keyFor(selector);
-        if (key != null && key.isValid() && !outbound.isEmpty()) {
+        if (!outbound.isEmpty()) {
             key.interestOps(key.interestOps() | SelectionKey.OP_WRITE);
         }
     }
 
-    private void write(SelectionKey key) throws IOException {
+    private void write(SelectionKey selectedKey) throws IOException {
         while (true) {
             Request request = outbound.peek();
             if (request == null) {
-                key.interestOps(key.interestOps() & ~SelectionKey.OP_WRITE);
+                selectedKey.interestOps(selectedKey.interestOps() & ~SelectionKey.OP_WRITE);
                 return;
             }
-
             if (request.state == RequestState.QUEUED) {
                 request.state = RequestState.WRITING;
             }
             int written = channel.write(request.buffer);
             if (written > 0) {
                 request.bytesWritten = true;
+                lastActivityNanos = System.nanoTime();
             }
-            lastActivityNanos = System.nanoTime();
             if (request.buffer.hasRemaining()) {
                 return;
             }
@@ -530,7 +597,6 @@ public final class NioConnection implements AutoCloseable {
             return;
         }
         lastActivityNanos = System.nanoTime();
-
         decoder.feed(readBuffer.array(), count);
         RespValue value;
         while ((value = decoder.poll()) != null) {
@@ -568,7 +634,7 @@ public final class NioConnection implements AutoCloseable {
     }
 
     private String pubSubType(RespValue value) {
-        java.util.List<RespValue> values;
+        List<RespValue> values;
         if (value instanceof RespValue.Array) {
             values = ((RespValue.Array) value).values;
         } else if (value instanceof RespValue.Push) {
@@ -605,13 +671,13 @@ public final class NioConnection implements AutoCloseable {
     }
 
     private void checkIdle() {
-        if (idlePingInterval.isZero() || idlePingInterval.isNegative() || closed || !readyForCommands) {
+        if (idlePingInterval.isZero() || idlePingInterval.isNegative() || !readyForCommands) {
             return;
         }
         long now = System.nanoTime();
         if (healthCheckInFlight) {
             if (now - healthCheckDeadlineNanos >= 0L) {
-                failAll(new BobaStrawConnectionException("Idle Redis health check timed out"));
+                onIoFailure(new BobaStrawConnectionException("Idle Redis health check timed out"));
             }
             return;
         }
@@ -638,7 +704,6 @@ public final class NioConnection implements AutoCloseable {
         BobaStrawConnectionException error = cause instanceof BobaStrawConnectionException
             ? (BobaStrawConnectionException) cause
             : new BobaStrawConnectionException("Redis connection failed", cause);
-
         if (closed) {
             return;
         }
@@ -654,12 +719,6 @@ public final class NioConnection implements AutoCloseable {
         pending.clear();
         preReady.clear();
 
-        ConnectionTask task;
-        while ((task = submitted.poll()) != null) {
-            task.fail(error);
-        }
-
-        ready.completeExceptionally(error);
         for (Request request : failed) {
             BobaStrawConnectionException requestError = classifyCommandDelivery
                 ? deliveryFailure(request, error)
@@ -698,37 +757,38 @@ public final class NioConnection implements AutoCloseable {
             return;
         }
         closeRequested = true;
-        submitted.add(new ConnectionTask() {
+        eventLoop.execute(new NioEventLoop.Task() {
             @Override
             public void run() {
                 failAll(new BobaStrawConnectionException("Client closed"), false);
+                closeResources();
             }
 
             @Override
-            public void fail(BobaStrawConnectionException error) {
-                // A failed connection is already terminal.
+            public void reject(BobaStrawConnectionException error) {
+                // EventLoop shutdown owns failure completion for registered connections.
             }
         });
-        Selector current = selector;
-        if (current != null) {
-            current.wakeup();
-        }
     }
 
     private void closeResources() {
-        try {
-            if (channel != null) {
-                channel.close();
-            }
-        } catch (IOException ignored) {
-            // Closing is best-effort.
+        SelectionKey currentKey = key;
+        key = null;
+        if (currentKey != null) {
+            currentKey.cancel();
         }
-        try {
-            if (selector != null) {
-                selector.close();
+        SocketChannel currentChannel = channel;
+        channel = null;
+        if (currentChannel != null) {
+            try {
+                currentChannel.close();
+            } catch (IOException ignored) {
+                // Closing is best-effort.
             }
-        } catch (IOException ignored) {
-            // Closing is best-effort.
+        }
+        eventLoop.detach(this);
+        if (legacyOwnedEventLoops != null) {
+            legacyOwnedEventLoops.close();
         }
     }
 

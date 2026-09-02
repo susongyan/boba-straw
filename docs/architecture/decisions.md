@@ -20,6 +20,12 @@ The client does not automatically retry commands. A timeout or disconnect after 
 [`network-model.md`](network-model.md)。该文档规定连接内状态最终由所属 EventLoop
 独占；命令取消后仍必须保留已发送请求的响应占位。
 
+`internal.NioConnection` 与 `internal.TransactionConnectionPool` 历史上曾暴露 public
+构造器。为保持二进制兼容，它们保留为 `@Deprecated` 兼容入口，并只在被直接使用时创建
+私有单 loop 资源；Boba Straw 的普通 Client、事务、Pub/Sub 和 Cluster 路径一律使用
+`BobaStrawClientResources` 的共享 EventLoopGroup。后续大版本才能移除这些 internal
+兼容入口。
+
 ## Current delivery boundary
 
 The initial implementation is standalone only. Public topology promises must not be documented as supported until Sentinel and Cluster routing are implemented and tested.
