@@ -24,6 +24,7 @@ final class NioEventLoop {
     }
 
     private final Selector selector;
+    private final NioIoLimits ioLimits;
     private final ConcurrentLinkedQueue<Task> tasks = new ConcurrentLinkedQueue<Task>();
     private final Set<NioConnection> connections = new HashSet<NioConnection>();
     private final AtomicBoolean accepting = new AtomicBoolean(true);
@@ -32,11 +33,19 @@ final class NioEventLoop {
     private volatile boolean terminated;
 
     NioEventLoop(String name) {
+        this(name, NioIoLimits.DEFAULT);
+    }
+
+    NioEventLoop(String name, NioIoLimits ioLimits) {
+        if (ioLimits == null) {
+            throw new IllegalArgumentException("ioLimits must not be null");
+        }
         try {
             this.selector = Selector.open();
         } catch (IOException error) {
             throw new BobaStrawConnectionException("Could not open NIO selector", error);
         }
+        this.ioLimits = ioLimits;
         this.thread = new Thread(new Runnable() {
             @Override
             public void run() {
@@ -85,21 +94,15 @@ final class NioEventLoop {
         return Thread.currentThread() == thread;
     }
 
+    NioIoLimits ioLimits() {
+        return ioLimits;
+    }
+
     void requestShutdown() {
         if (!accepting.compareAndSet(true, false)) {
             return;
         }
-        tasks.add(new Task() {
-            @Override
-            public void run() {
-                shutdownRequested = true;
-            }
-
-            @Override
-            public void reject(BobaStrawConnectionException error) {
-                // The loop itself is already shutting down.
-            }
-        });
+        shutdownRequested = true;
         selector.wakeup();
     }
 
@@ -124,12 +127,15 @@ final class NioEventLoop {
         BobaStrawConnectionException terminal = null;
         try {
             while (!shutdownRequested) {
-                drainTasks();
+                boolean tasksRemain = drainTasks();
                 if (shutdownRequested) {
                     break;
                 }
-                selector.select(SELECT_TIMEOUT_MILLIS);
-                drainTasks();
+                if (tasksRemain || hasImmediateConnectionWork()) {
+                    selector.selectNow();
+                } else {
+                    selector.select(SELECT_TIMEOUT_MILLIS);
+                }
                 if (shutdownRequested) {
                     break;
                 }
@@ -156,12 +162,14 @@ final class NioEventLoop {
         }
     }
 
-    private void drainTasks() {
+    private boolean drainTasks() {
+        int processed = 0;
         Task task;
-        while ((task = tasks.poll()) != null) {
+        while (processed < ioLimits.maxTasksPerTurn && (task = tasks.poll()) != null) {
+            processed++;
             if (shutdownRequested) {
                 task.reject(closedError());
-                continue;
+                break;
             }
             try {
                 task.run();
@@ -169,6 +177,16 @@ final class NioEventLoop {
                 task.reject(new BobaStrawConnectionException("NIO event loop task failed", error));
             }
         }
+        return !tasks.isEmpty();
+    }
+
+    private boolean hasImmediateConnectionWork() {
+        for (NioConnection connection : connections) {
+            if (connection.hasImmediateWork()) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private void processSelectedKeys() {

@@ -22,7 +22,13 @@
 factory 分配给固定 EventLoop；连接创建后不迁移。默认 Client 自建并拥有一个 loop，
 应用可显式传入 Resources 来让多个 Client 共享有限数量的 Selector 线程。
 
-读缓冲复用、gathering write、真正的 RESP 状态机、背压和回调隔离仍在后续阶段。
+阶段 3 已在每个连接上复用 16 KiB heap 读缓冲，并以可复用 `ByteBuffer[]` 聚合写入。
+一个 EventLoop 单轮最多执行 256 个跨线程任务；单连接最多读 64 KiB、写 64 KiB / 32 帧、
+分发 64 个完整 RESP 响应。命中响应上限时立即停止继续从 socket 读入，下一轮通过
+`selectNow()` 继续处理已缓存响应或可读 socket，避免 100 ms selector 等待和单连接长期独占。
+
+RESP decoder 的增量状态机、协议大小上限、显式背压和回调隔离仍属于后续阶段；阶段 3
+没有把这些能力提前标记为完成。
 
 ## 目标结构
 
@@ -33,7 +39,7 @@ flowchart LR
     Resources["BobaStrawClientResources"] --> Loop1
     Resources --> Loop2["NioEventLoop 2"]
     Resources --> LoopN["NioEventLoop N"]
-    Loop1 --> Selector1["Selector + deadline queue"]
+    Loop1 --> Selector1["Selector（阶段 5 增加 deadline queue）"]
     Selector1 --> A["NioConnection A"]
     Selector1 --> B["NioConnection B"]
     Loop2 --> C["NioConnection C"]
@@ -46,7 +52,7 @@ application threads
   v
 per-event-loop MPSC task queue -- wakeup --> NioEventLoop
                                              | Selector
-                                             | deadline queue
+                                             | deadline queue（阶段 5）
                                              +-- NioConnection A
                                              +-- NioConnection B
                                              +-- NioConnection C
@@ -85,8 +91,8 @@ sequenceDiagram
     App->>Loop: Selector.wakeup()
     Loop->>Queue: drain tasks
     Loop->>Loop: 加入 outbound FIFO
-    Loop->>Redis: non-blocking write
-    Loop->>Loop: outbound -> pending
+    Loop->>Redis: gathering write（最多 32 帧 / 64 KiB）
+    Loop->>Loop: 仅完整帧从 outbound -> pending
     Redis-->>Loop: RESP response / Push / Attribute
     Loop->>Loop: 增量解码与响应分类
     alt 普通响应
@@ -132,48 +138,63 @@ QUEUED -> CANCELLED
 ```
 
 - `QUEUED` 取消：从待写队列移除，Redis 明确未收到该请求。
+- 请求只在自身 `ByteBuffer` 的 position 实际前进后从 `QUEUED` 进入 `WRITING`；零字节
+  写入后的取消仍可安全移除，不会污染协议队列。
 - `WRITING`/`SENT` 取消：对调用方结束 Future，但保留协议占位，收到响应后
   丢弃该响应，防止它匹配到下一条请求。
-- 断连时：未写出的请求和可能已写出的请求使用不同失败分类；两者均不重试。
+- 断连时：未写出的请求和可能已写出的请求使用不同失败分类；若一次 gathering write
+  直接抛出 I/O 异常，参与该次 write 的帧保守地标记为“可能已写出”，两者均不重试。
 
 ## 网络、协议与分发
 
-阶段 3 的目标 EventLoop 单轮按以下顺序工作：排空跨线程任务、按最近 deadline 等待
-Selector、处理 connect/read/write、处理定时任务，并对每轮读写施加字节预算，避免
-超大 Pipeline 长时间独占线程。当前阶段 2 尚未加入任务、读或写预算；高负载连接可能
-暂时占用同组 loop，这也是阶段 3 未标记为完成的原因。
+阶段 3 已将 EventLoop 单轮服务切片固定为：最多执行 256 个跨线程任务，处理 selector
+事件，然后让每条被选中的连接最多读 64 KiB、聚合写 32 帧 / 64 KiB，并最多分发 64 个
+完整 RESP 响应。若任务积压或 decoder 已有完整响应待分发，loop 使用 `selectNow()`，
+而不是等待正常的最多 100 ms selector 超时。
+
+这些数值由 package-private `NioIoLimits` 管理，暂不暴露为业务配置；它们是公平性保护，
+不是吞吐调优承诺，后续以 JMH 与负载压测结果校准。
 
 ```mermaid
 flowchart TD
-    Begin["EventLoop 单轮开始"] --> Tasks["drain submitted tasks"]
-    Tasks --> Wait["Selector.select(最近 deadline)"]
-    Wait --> Events["connect / read / write events"]
+    Begin["EventLoop 单轮开始"] --> Tasks["最多 drain 256 个 submitted tasks"]
+    Tasks --> Ready{"任务积压或缓存响应？"}
+    Ready -->|"是"| Poll["Selector.selectNow()"]
+    Ready -->|"否"| Wait["Selector.select(最多 100 ms)"]
+    Poll --> Events["connect / read / write events"]
+    Wait --> Events
     Events --> Read{"可读?"}
-    Read -->|"是"| Decode["复用读缓冲 + RESP 增量解码"]
-    Decode --> Dispatch["Push/Attribute/普通响应分发"]
+    Read -->|"是"| Decode["连接私有 16 KiB 读缓冲；最多读 64 KiB"]
+    Decode --> Dispatch["最多分发 64 响应；命中上限立即让出"]
     Read -->|"否"| Write
     Dispatch --> Write{"可写或有 outbound?"}
-    Write -->|"是"| Flush["按字节预算 flush frames"]
-    Write -->|"否"| Deadlines
-    Flush --> Deadlines["处理 timeout / idle PING / reconnect deadline"]
-    Deadlines --> Begin
+    Write -->|"是"| Flush["gathering write：最多 32 帧 / 64 KiB"]
+    Write -->|"否"| Tick
+    Flush --> Tick["处理 deferred response、arm write、idle check"]
+    Tick --> Begin
 ```
 
-- 写入使用帧队列，并在后续阶段使用 gathering write 降低 payload 拷贝和
-  syscall 次数。
-- 每个连接复用读缓冲；禁止在每次 `read()` 分配临时 ByteBuffer。
-- RESP decoder 使用可 compact 的累积缓冲和容器状态栈。碎片输入不得重复复制
-  或重新解析已经确认的前缀。
+- 写入使用连接私有的可复用 `ByteBuffer[]`、请求引用和写前 position 数组；一次
+  `SocketChannel.write(ByteBuffer[])` 最多聚合 32 帧和 64 KiB。若最后一帧被预算截断，
+  临时收窄的 limit 必须在推进 `outbound -> pending` 前恢复，防止响应 FIFO 错位。
+- 每个连接复用 heap 读缓冲；最大一次读服务为 64 KiB，但达到完整响应分发上限时不会
+  继续向 decoder 灌入数据。decoder 当前仍复制输入，减少累积复制和碎片重解析是阶段 4
+  的工作。
+- 同一 EventLoop 单轮中，socket 读入和其他内部 transport 共用一个响应分发余额；不能
+  因多次输入而绕过 64 个响应的服务上限。
 - RESP3 Push 与 Attribute 在进入普通 `pending` 队列前分流。Attribute 关联
   的普通响应仍严格匹配队首请求。
-- Pub/Sub listener 和可选异步回调 executor 不得阻塞 EventLoop。
+- Pub/Sub listener 和 `CompletionStage` 的非 async continuation 当前仍可能运行在
+  EventLoop；阶段 5 将提供有界 dispatcher / 可选 callback executor，届时不得让业务
+  回调阻塞网络线程。
 - Pub/Sub 专用连接在具备命令感知的 RESP3 `pong` 匹配前不发送 idle PING；避免
   `pong` Push 被误当作普通命令响应。
 
 ## Deadline、健康检查与背压
 
-每个 EventLoop 持有 deadline 队列，统一管理命令超时、空闲 PING 和重连退避。
-已完成请求的 deadline 必须被取消或跳过，不能无限积累定时任务。
+阶段 5 将使每个 EventLoop 持有 deadline 队列，统一管理命令超时、空闲 PING 和重连退避；
+已完成请求的 deadline 必须被取消或跳过，不能无限积累定时任务。当前的命令超时与重连
+调度尚未完成这项统一收敛。
 
 连接必须提供有界保护：最大 in-flight 命令数、最大待写字节、最大 RESP 响应、
 最大 Pub/Sub 分发积压。超限时本地明确拒绝，不能静默丢弃或无限缓存。
@@ -214,3 +235,31 @@ flowchart TD
   的 Client 相互关闭隔离；关闭 Resources 会使在途请求终止并拒绝后续命令。
 - 上述生命周期语义由 `BobaStrawClientResourcesTest` 与既有协议/Cluster 回归覆盖，
   并通过完整 `mvn test`。
+
+### 阶段 3 验收（已完成）
+
+- 每个连接仅分配一次 16 KiB heap 读缓冲，并复用 gathering write 所需的 buffer / request
+  数组；不会在每次 socket read 时创建临时 `ByteBuffer`。
+- 单轮任务、读、写和已解码响应均有内部预算：256 个任务、64 KiB 读、32 帧 / 64 KiB
+  写、64 个完整响应。已缓存响应会驱动 `selectNow()`，不会等待固定 selector 超时。
+- 写入状态只在实际 position 前进后变为 `WRITING`；部分帧、取消、临时写 limit 恢复和
+  `outbound -> pending` 推进均保持物理连接 FIFO。写 syscall 异常的参与帧按“可能已执行”
+  保守失败，绝不自动重试。
+- `NioConnectionIoTest` 以小预算验证大帧 + 后续命令的 RESP 帧完整性和顺序，并验证
+  响应 burst 每个 EventLoop turn 只分发预算内的响应；同一 loop 上繁忙 burst 也会让出
+  已就绪的另一连接。既有碎片协议与取消测试继续回归。
+
+### 阶段 6 性能验收计划（待阶段 4、5 完成后执行）
+
+- 先探测本机 JDK、Colima 与容器运行状况；缺少的 JDK、JMH 构建依赖、Redis / Valkey
+  镜像和观测工具可直接安装。环境版本、镜像 digest、CPU 核数、内存、JVM 参数与命令必须
+  写入 `docs/benchmarks/`，使结果可复跑。
+- 同时保留阶段 2 提交 `ca078f4` 和网络模型最终提交的基线，分别在 Redis 与 Valkey 上
+  运行同一组工作负载：单命令 GET / SET、1/16/128 命令 Pipeline、大 value、碎片响应、
+  多 Client 共享一个 EventLoop 的 noisy-neighbor 场景，以及阶段 5 完成后的 Pub/Sub
+  慢消费者场景。
+- 记录吞吐、P50/P95/P99/P999 延迟、分配率、GC、CPU、线程数、socket read/write 次数和
+  每连接完成量；公平性以繁忙连接与健康连接的完成量和尾延迟共同判断，不能只报平均值。
+- 每个 JMH workload 至少包含 warmup、多个 measurement fork 和原始 JSON/文本输出；
+  网络端到端压测另保留客户端 / server 侧指标。没有完成这些步骤前，不对吞吐或延迟作
+  生产性能承诺。

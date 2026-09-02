@@ -10,14 +10,21 @@ public final class NioEventLoopGroup implements AutoCloseable {
     private final AtomicBoolean closed = new AtomicBoolean();
 
     public NioEventLoopGroup(int threads) {
+        this(threads, NioIoLimits.DEFAULT);
+    }
+
+    NioEventLoopGroup(int threads, NioIoLimits ioLimits) {
         if (threads < 1) {
             throw new IllegalArgumentException("eventLoopThreads must be positive");
+        }
+        if (ioLimits == null) {
+            throw new IllegalArgumentException("ioLimits must not be null");
         }
         this.loops = new NioEventLoop[threads];
         int created = 0;
         try {
             for (; created < threads; created++) {
-                loops[created] = new NioEventLoop("boba-straw-nio-" + created);
+                loops[created] = new NioEventLoop("boba-straw-nio-" + created, ioLimits);
             }
         } catch (RuntimeException error) {
             for (int index = 0; index < created; index++) {

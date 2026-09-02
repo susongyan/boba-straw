@@ -24,10 +24,9 @@ import java.util.function.Consumer;
 
 /** One non-blocking TCP connection with FIFO response matching. */
 public final class NioConnection implements AutoCloseable {
-    private static final int READ_BUFFER_SIZE = 8192;
-
     private final NioEventLoop eventLoop;
     private final NioEventLoopGroup legacyOwnedEventLoops;
+    private final NioIoLimits ioLimits;
     private final String host;
     private final int port;
     private final Duration timeout;
@@ -41,6 +40,10 @@ public final class NioConnection implements AutoCloseable {
     private final Queue<Request> preReady = new ArrayDeque<Request>();
     private final RespCodec.Decoder decoder = new RespCodec.Decoder();
     private final Consumer<RespValue> pushListener;
+    private final ByteBuffer readBuffer;
+    private final ByteBuffer[] writeBuffers;
+    private final Request[] writeRequests;
+    private final int[] writePositions;
 
     private volatile boolean closed;
     private volatile boolean closeRequested;
@@ -49,6 +52,10 @@ public final class NioConnection implements AutoCloseable {
     private boolean healthCheckInFlight;
     private long healthCheckDeadlineNanos;
     private boolean readyForCommands;
+    private boolean bufferedResponsesPending;
+    private int responseBudgetRemainingThisTurn;
+    private boolean lastWriteFrameLimited;
+    private int lastWriteFrameOriginalLimit;
     private SelectionKey key;
     private SocketChannel channel;
 
@@ -156,6 +163,7 @@ public final class NioConnection implements AutoCloseable {
     ) {
         this.eventLoop = eventLoop;
         this.legacyOwnedEventLoops = legacyOwnedEventLoops;
+        this.ioLimits = eventLoop.ioLimits();
         this.host = host;
         this.port = port;
         this.timeout = timeout;
@@ -165,6 +173,11 @@ public final class NioConnection implements AutoCloseable {
         this.clientName = clientName;
         this.pushListener = pushListener;
         this.idlePingInterval = idlePingInterval == null ? Duration.ZERO : idlePingInterval;
+        this.readBuffer = ByteBuffer.allocate(ioLimits.readBufferSize);
+        this.writeBuffers = new ByteBuffer[ioLimits.maxGatheringFrames];
+        this.writeRequests = new Request[ioLimits.maxGatheringFrames];
+        this.writePositions = new int[ioLimits.maxGatheringFrames];
+        this.responseBudgetRemainingThisTurn = ioLimits.maxDecodedResponsesPerTurn;
         submit(new ConnectionTask() {
             @Override
             public void run() {
@@ -301,12 +314,23 @@ public final class NioConnection implements AutoCloseable {
         }
     }
 
-    void onTick() {
+    void onTick() throws IOException {
         if (closed) {
             return;
         }
-        armWrites();
-        checkIdle();
+        try {
+            if (bufferedResponsesPending && responseBudgetRemainingThisTurn > 0) {
+                drainAvailableResponses();
+            }
+            armWrites();
+            checkIdle();
+        } finally {
+            responseBudgetRemainingThisTurn = ioLimits.maxDecodedResponsesPerTurn;
+        }
+    }
+
+    boolean hasImmediateWork() {
+        return bufferedResponsesPending;
     }
 
     void onIoFailure(Throwable error) {
@@ -562,22 +586,147 @@ public final class NioConnection implements AutoCloseable {
     }
 
     private void write(SelectionKey selectedKey) throws IOException {
-        while (true) {
-            Request request = outbound.peek();
-            if (request == null) {
-                selectedKey.interestOps(selectedKey.interestOps() & ~SelectionKey.OP_WRITE);
+        if (outbound.isEmpty()) {
+            selectedKey.interestOps(selectedKey.interestOps() & ~SelectionKey.OP_WRITE);
+            return;
+        }
+
+        int frameCount = prepareWriteBatch();
+        if (frameCount == 0) {
+            return;
+        }
+
+        ByteBuffer limitedBuffer = lastWriteFrameLimited ? writeBuffers[frameCount - 1] : null;
+        long written = 0L;
+        boolean writeCompleted = false;
+        try {
+            written = channel.write(writeBuffers, 0, frameCount);
+            writeCompleted = true;
+        } catch (IOException error) {
+            markWriteBatchAsPossiblySent(frameCount);
+            throw error;
+        } finally {
+            if (lastWriteFrameLimited) {
+                limitedBuffer.limit(lastWriteFrameOriginalLimit);
+            }
+            if (!writeCompleted) {
+                clearWriteBatch(frameCount);
+            }
+        }
+        if (written > 0L) {
+            lastActivityNanos = System.nanoTime();
+        }
+
+        try {
+            finishWrittenRequests(frameCount);
+        } finally {
+            clearWriteBatch(frameCount);
+        }
+        if (outbound.isEmpty()) {
+            selectedKey.interestOps(selectedKey.interestOps() & ~SelectionKey.OP_WRITE);
+        }
+    }
+
+    private void markWriteBatchAsPossiblySent(int frameCount) {
+        for (int index = 0; index < frameCount; index++) {
+            writeRequests[index].writeMayHaveReachedServer = true;
+        }
+    }
+
+    private void read() throws IOException {
+        int remainingReadBytes = ioLimits.maxReadBytesPerTurn;
+        while (remainingReadBytes > 0) {
+            readBuffer.clear();
+            int readLimit = Math.min(readBuffer.capacity(), remainingReadBytes);
+            readBuffer.limit(readLimit);
+            int count = channel.read(readBuffer);
+            if (count == -1) {
+                throw new IOException("Redis closed the connection");
+            }
+            if (count == 0) {
                 return;
             }
-            if (request.state == RequestState.QUEUED) {
-                request.state = RequestState.WRITING;
+            lastActivityNanos = System.nanoTime();
+            remainingReadBytes -= count;
+            processInbound(readBuffer.array(), count);
+            if (responseBudgetRemainingThisTurn == 0) {
+                return;
             }
-            int written = channel.write(request.buffer);
-            if (written > 0) {
+        }
+    }
+
+    /**
+     * Accepts bytes already read by an EventLoop-owned transport.
+     *
+     * <p>This is package-private so internal transports can share the same RESP dispatch path;
+     * application code cannot inject responses.</p>
+     */
+    void processInbound(byte[] source, int length) throws IOException {
+        if (!eventLoop.isEventLoopThread()) {
+            throw new IllegalStateException("Inbound Redis bytes must be processed on the EventLoop");
+        }
+        if (source == null || length < 0 || length > source.length) {
+            throw new IllegalArgumentException("Inbound Redis byte length is invalid");
+        }
+        decoder.feed(source, length);
+        drainAvailableResponses();
+    }
+
+    private void drainAvailableResponses() throws IOException {
+        if (responseBudgetRemainingThisTurn == 0) {
+            bufferedResponsesPending = true;
+            return;
+        }
+        int dispatched = drainDecodedResponses(responseBudgetRemainingThisTurn);
+        responseBudgetRemainingThisTurn -= dispatched;
+    }
+
+    private int prepareWriteBatch() {
+        int frameCount = 0;
+        int remainingBytes = ioLimits.maxWriteBytesPerTurn;
+        lastWriteFrameLimited = false;
+        lastWriteFrameOriginalLimit = 0;
+        for (Request request : outbound) {
+            if (frameCount == ioLimits.maxGatheringFrames || remainingBytes == 0) {
+                break;
+            }
+            ByteBuffer buffer = request.buffer;
+            int bytes = buffer.remaining();
+            if (bytes == 0) {
+                throw new IllegalStateException("Outbound Redis request has no remaining command bytes");
+            }
+            writeBuffers[frameCount] = buffer;
+            writeRequests[frameCount] = request;
+            writePositions[frameCount] = buffer.position();
+            frameCount++;
+            if (bytes >= remainingBytes) {
+                if (bytes > remainingBytes) {
+                    lastWriteFrameLimited = true;
+                    lastWriteFrameOriginalLimit = buffer.limit();
+                    buffer.limit(buffer.position() + remainingBytes);
+                }
+                break;
+            }
+            remainingBytes -= bytes;
+        }
+        return frameCount;
+    }
+
+    private void finishWrittenRequests(int frameCount) {
+        for (int index = 0; index < frameCount; index++) {
+            Request request = writeRequests[index];
+            ByteBuffer buffer = request.buffer;
+            if (buffer.position() > writePositions[index]) {
                 request.bytesWritten = true;
-                lastActivityNanos = System.nanoTime();
+                if (request.state == RequestState.QUEUED) {
+                    request.state = RequestState.WRITING;
+                }
             }
-            if (request.buffer.hasRemaining()) {
+            if (buffer.hasRemaining()) {
                 return;
+            }
+            if (outbound.peek() != request) {
+                throw new IllegalStateException("Outbound Redis request order changed while writing");
             }
             outbound.remove();
             pending.add(request);
@@ -587,38 +736,46 @@ public final class NioConnection implements AutoCloseable {
         }
     }
 
-    private void read() throws IOException {
-        ByteBuffer readBuffer = ByteBuffer.allocate(READ_BUFFER_SIZE);
-        int count = channel.read(readBuffer);
-        if (count == -1) {
-            throw new IOException("Redis closed the connection");
+    private void clearWriteBatch(int frameCount) {
+        for (int index = 0; index < frameCount; index++) {
+            writeBuffers[index] = null;
+            writeRequests[index] = null;
+            writePositions[index] = 0;
         }
-        if (count == 0) {
+        lastWriteFrameLimited = false;
+        lastWriteFrameOriginalLimit = 0;
+    }
+
+    private int drainDecodedResponses(int budget) throws IOException {
+        int processed = 0;
+        RespValue value;
+        while (processed < budget && (value = decoder.poll()) != null) {
+            dispatch(value);
+            processed++;
+        }
+        bufferedResponsesPending = processed == budget;
+        return processed;
+    }
+
+    private void dispatch(RespValue value) throws IOException {
+        RespValue payload = value instanceof RespValue.Attribute
+            ? ((RespValue.Attribute) value).value
+            : value;
+        if (payload instanceof RespValue.Push) {
+            if (pushListener != null) {
+                if (isPubSubAcknowledgement(payload)) {
+                    completeNextRequest(payload);
+                } else {
+                    pushListener.accept(payload);
+                }
+            }
             return;
         }
-        lastActivityNanos = System.nanoTime();
-        decoder.feed(readBuffer.array(), count);
-        RespValue value;
-        while ((value = decoder.poll()) != null) {
-            RespValue payload = value instanceof RespValue.Attribute
-                ? ((RespValue.Attribute) value).value
-                : value;
-            if (payload instanceof RespValue.Push) {
-                if (pushListener != null) {
-                    if (isPubSubAcknowledgement(payload)) {
-                        completeNextRequest(payload);
-                    } else {
-                        pushListener.accept(payload);
-                    }
-                }
-                continue;
-            }
-            if (pushListener != null && isPubSubMessage(payload)) {
-                pushListener.accept(payload);
-                continue;
-            }
-            completeNextRequest(value);
+        if (pushListener != null && isPubSubMessage(payload)) {
+            pushListener.accept(payload);
+            return;
         }
+        completeNextRequest(value);
     }
 
     private boolean isPubSubMessage(RespValue value) {
@@ -731,7 +888,7 @@ public final class NioConnection implements AutoCloseable {
     private BobaStrawConnectionException deliveryFailure(
         Request request, BobaStrawConnectionException connectionError
     ) {
-        if (request.bytesWritten || request.state == RequestState.SENT
+        if (request.bytesWritten || request.writeMayHaveReachedServer || request.state == RequestState.SENT
             || request.state == RequestState.CANCELLED_DRAINING) {
             return new BobaStrawCommandMayHaveExecutedException(
                 "Redis connection failed after command bytes were written; the command may have executed",
@@ -812,6 +969,7 @@ public final class NioConnection implements AutoCloseable {
         private final CompletableFuture<RespValue> future = new CompletableFuture<RespValue>();
         private RequestState state = RequestState.QUEUED;
         private boolean bytesWritten;
+        private boolean writeMayHaveReachedServer;
 
         private Request(ByteBuffer buffer) {
             this.buffer = buffer;

@@ -35,7 +35,7 @@
 - [x] 网络模型、EventLoop 所有权、取消与背压架构文档
 - [x] 阶段 1：连接队列状态收敛和取消/FIFO 安全
 - [x] 阶段 2：共享 Selector EventLoopGroup
-- [ ] 阶段 3：读缓冲复用、gathering write 与公平预算
+- [x] 阶段 3：读缓冲复用、gathering write 与公平预算
 - [ ] 阶段 4：RESP 增量状态机与协议资源上限
 - [ ] 阶段 5：统一 deadline、背压、回调与订阅分发隔离
 - [ ] 阶段 6：JMH、故障注入和负载验收
@@ -52,6 +52,19 @@ Standalone、事务、Pub/Sub 和 Cluster 全部经由统一连接 factory 分�
 同组单条连接失败不影响其他连接；关闭使用外部 Resources 的 Client 不关闭资源，关闭
 Resources 会终止在途请求并拒绝新命令。上述生命周期由 socket 测试覆盖，并已通过
 `mvn test`。
+
+阶段 3 验收记录：每个连接复用 16 KiB heap 读缓冲和 gathering write 数组；单个
+EventLoop turn 最多执行 256 个跨线程任务，单连接最多读 64 KiB、聚合写 32 帧 / 64 KiB、
+分发 64 个完整响应。命中响应额度时停止继续从 socket 读入，缓存响应令下一轮使用
+`selectNow()`，避免等待 100 ms。请求只在实际写出字节后进入 `WRITING`，取消与断连仍
+保持未发送 / 可能已执行的失败语义。`NioConnectionIoTest` 覆盖预算截断的大帧 FIFO
+写入、响应 burst 分片分发和同 loop 跨连接让出；完整 `mvn test` 已通过。
+
+阶段 6 性能验收计划：在阶段 4、5 完成后直接探测并安装缺少的本机 JDK、JMH、Colima
+容器镜像和观测工具；保留阶段 2 提交 `ca078f4` 与网络模型最终提交的可复跑基线。测试
+Redis 与 Valkey 的单命令、Pipeline、大 value、碎片响应、多 Client 共享 EventLoop 和
+慢消费者负载，记录吞吐、P50/P95/P99/P999、CPU、GC、分配率、线程数、socket I/O 和
+跨连接公平性；环境、命令、原始结果和结论统一保存至 `docs/benchmarks/`。
 
 ### 协议与连接
 
