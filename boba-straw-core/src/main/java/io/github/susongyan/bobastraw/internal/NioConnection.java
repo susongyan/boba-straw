@@ -5,6 +5,7 @@ import io.github.susongyan.bobastraw.BobaStrawCommandNotSentException;
 import io.github.susongyan.bobastraw.BobaStrawConnectionException;
 import io.github.susongyan.bobastraw.ProtocolVersion;
 import io.github.susongyan.bobastraw.protocol.RespCodec;
+import io.github.susongyan.bobastraw.protocol.RespLimits;
 import io.github.susongyan.bobastraw.protocol.RespValue;
 
 import java.io.IOException;
@@ -38,7 +39,7 @@ public final class NioConnection implements AutoCloseable {
     private final Queue<Request> outbound = new ArrayDeque<Request>();
     private final Queue<Request> pending = new ArrayDeque<Request>();
     private final Queue<Request> preReady = new ArrayDeque<Request>();
-    private final RespCodec.Decoder decoder = new RespCodec.Decoder();
+    private final RespCodec.Decoder decoder;
     private final Consumer<RespValue> pushListener;
     private final ByteBuffer readBuffer;
     private final ByteBuffer[] writeBuffers;
@@ -129,7 +130,7 @@ public final class NioConnection implements AutoCloseable {
         Duration idlePingInterval
     ) {
         this(legacyOwnedEventLoops.next(), host, port, timeout, requestedProtocol, username, password,
-            clientName, pushListener, idlePingInterval, legacyOwnedEventLoops);
+            clientName, pushListener, idlePingInterval, legacyOwnedEventLoops, RespLimits.defaults());
     }
 
     NioConnection(
@@ -145,7 +146,24 @@ public final class NioConnection implements AutoCloseable {
         Duration idlePingInterval
     ) {
         this(eventLoop, host, port, timeout, requestedProtocol, username, password, clientName,
-            pushListener, idlePingInterval, null);
+            pushListener, idlePingInterval, null, RespLimits.defaults());
+    }
+
+    NioConnection(
+        NioEventLoop eventLoop,
+        String host,
+        int port,
+        Duration timeout,
+        ProtocolVersion requestedProtocol,
+        String username,
+        String password,
+        String clientName,
+        Consumer<RespValue> pushListener,
+        Duration idlePingInterval,
+        RespLimits respLimits
+    ) {
+        this(eventLoop, host, port, timeout, requestedProtocol, username, password, clientName,
+            pushListener, idlePingInterval, null, respLimits);
     }
 
     private NioConnection(
@@ -159,8 +177,12 @@ public final class NioConnection implements AutoCloseable {
         String clientName,
         Consumer<RespValue> pushListener,
         Duration idlePingInterval,
-        NioEventLoopGroup legacyOwnedEventLoops
+        NioEventLoopGroup legacyOwnedEventLoops,
+        RespLimits respLimits
     ) {
+        if (respLimits == null) {
+            throw new IllegalArgumentException("respLimits must not be null");
+        }
         this.eventLoop = eventLoop;
         this.legacyOwnedEventLoops = legacyOwnedEventLoops;
         this.ioLimits = eventLoop.ioLimits();
@@ -173,6 +195,7 @@ public final class NioConnection implements AutoCloseable {
         this.clientName = clientName;
         this.pushListener = pushListener;
         this.idlePingInterval = idlePingInterval == null ? Duration.ZERO : idlePingInterval;
+        this.decoder = new RespCodec.Decoder(respLimits);
         this.readBuffer = ByteBuffer.allocate(ioLimits.readBufferSize);
         this.writeBuffers = new ByteBuffer[ioLimits.maxGatheringFrames];
         this.writeRequests = new Request[ioLimits.maxGatheringFrames];

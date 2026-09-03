@@ -27,8 +27,10 @@ factory 分配给固定 EventLoop；连接创建后不迁移。默认 Client 自
 分发 64 个完整 RESP 响应。命中响应上限时立即停止继续从 socket 读入，下一轮通过
 `selectNow()` 继续处理已缓存响应或可读 socket，避免 100 ms selector 等待和单连接长期独占。
 
-RESP decoder 的增量状态机、协议大小上限、显式背压和回调隔离仍属于后续阶段；阶段 3
-没有把这些能力提前标记为完成。
+阶段 4 已将 decoder 改为显式的增量状态机：它使用可 compact 的输入缓冲、流式 Bulk
+状态和非递归 aggregate frame stack，不再对不完整回复反复重解析或拼接整个输入数组。
+`RespLimits` 在 decoder 内强制执行，并从 Standalone、重连、事务专用池、Pub/Sub 专用
+连接和 Cluster 每个节点连接统一传递。显式背压、统一 deadline 和回调隔离仍属于阶段 5。
 
 ## 目标结构
 
@@ -94,7 +96,7 @@ sequenceDiagram
     Loop->>Redis: gathering write（最多 32 帧 / 64 KiB）
     Loop->>Loop: 仅完整帧从 outbound -> pending
     Redis-->>Loop: RESP response / Push / Attribute
-    Loop->>Loop: 增量解码与响应分类
+    Loop->>Loop: 增量状态机解码、资源校验与响应分类
     alt 普通响应
         Loop->>Loop: pending 队首匹配
         Loop-->>App: complete CompletionStage
@@ -178,8 +180,8 @@ flowchart TD
   `SocketChannel.write(ByteBuffer[])` 最多聚合 32 帧和 64 KiB。若最后一帧被预算截断，
   临时收窄的 limit 必须在推进 `outbound -> pending` 前恢复，防止响应 FIFO 错位。
 - 每个连接复用 heap 读缓冲；最大一次读服务为 64 KiB，但达到完整响应分发上限时不会
-  继续向 decoder 灌入数据。decoder 当前仍复制输入，减少累积复制和碎片重解析是阶段 4
-  的工作。
+  继续向 decoder 灌入数据。decoder 使用可 compact 的内部输入缓冲；一个 Bulk payload
+  完整到达后只从该缓冲复制到最终 `byte[]` 一次，不会因为后续碎片而重新解析已完成部分。
 - 同一 EventLoop 单轮中，socket 读入和其他内部 transport 共用一个响应分发余额；不能
   因多次输入而绕过 64 个响应的服务上限。
 - RESP3 Push 与 Attribute 在进入普通 `pending` 队列前分流。Attribute 关联
@@ -189,6 +191,41 @@ flowchart TD
   回调阻塞网络线程。
 - Pub/Sub 专用连接在具备命令感知的 RESP3 `pong` 匹配前不发送 idle PING；避免
   `pong` Push 被误当作普通命令响应。
+
+### RESP 增量状态机与资源上限
+
+```mermaid
+flowchart LR
+    Socket["Socket read buffer"] --> Input["Decoder compact input buffer"]
+    Input --> Header["marker / strict CRLF line state"]
+    Header --> Bulk["Bulk state: payload -> final byte[]"]
+    Header --> Frames["explicit Frame stack: Array / Map / Set / Push / Attribute"]
+    Bulk --> Complete["complete RespValue"]
+    Frames --> Complete
+    Complete --> Classify{"value type"}
+    Classify -->|"normal"| Fifo["pending queue head"]
+    Classify -->|"Push"| Push["Push / PubSub dispatcher"]
+    Classify -->|"Attribute"| Atomic["attach complete payload atomically"]
+    Atomic --> Classify
+```
+
+`RespCodec.Decoder` 保留 `feed(byte[], int)` / `poll()` 兼容接口，但内部不使用递归。
+未完整的 line、Bulk 和 aggregate 只保留必要状态；下一段字节从上次位置继续。Attribute
+frame 必须同时收齐 `2 * attributeCount` 个键值和其后的完整 payload 才能产出，因此
+Attribute 不会抢占 Push 或普通回复的 FIFO 位置。
+
+每条物理连接使用一份不可变的 `RespLimits`。默认值为：
+
+- `maxBufferedBytes`：64 MiB 的未解码 wire 输入；
+- `maxResponseBytes`：64 MiB 的单个顶层回复 wire 字节；
+- `maxBulkLength`：32 MiB 的 Blob / Blob Error / Verbatim payload；
+- `maxLineLength`：64 KiB；`maxNestingDepth`：64；
+- `maxAggregateElements`：100,000 个累计 aggregate child。
+
+违反 RESP 格式、CRLF 终止规则或任一限制都会产生 `BobaStrawProtocolException` 并终止
+该物理连接。已写出的请求仍按“可能已执行”失败，未写出的请求仍按“明确未发送”失败；
+不会截断回复、错配 pending 队列或自动重试。`RespLimits` 是 Client 配置而不是共享
+`BobaStrawClientResources` 配置，因此共享同一组 selector 的 Client 可以使用不同限制。
 
 ## Deadline、健康检查与背压
 
@@ -204,7 +241,7 @@ flowchart TD
 1. **连接正确性**：收敛队列状态所有权，修复取消/写入竞态；Future 在锁外完成。
 2. **共享 EventLoopGroup**：多个连接共享有限 Selector 线程，并完成生命周期测试。
 3. **I/O 吞吐**：复用读缓冲、写入聚合、读写公平预算。
-4. **RESP 增量状态机**：减少累积复制和碎片重解析，并加入协议资源上限。
+4. **RESP 增量状态机（已完成）**：减少累积复制和碎片重解析，并加入协议资源上限。
 5. **背压与回调隔离**：有界队列、统一 deadline、Pub/Sub dispatcher、可选 callback executor。
 6. **基准与故障注入**：并发取消、部分写、断连、慢消费者、Redis/Valkey 矩阵和 JMH。
 
@@ -248,6 +285,21 @@ flowchart TD
 - `NioConnectionIoTest` 以小预算验证大帧 + 后续命令的 RESP 帧完整性和顺序，并验证
   响应 burst 每个 EventLoop turn 只分发预算内的响应；同一 loop 上繁忙 burst 也会让出
   已就绪的另一连接。既有碎片协议与取消测试继续回归。
+
+### 阶段 4 验收（已完成）
+
+- `RespCodec.Decoder` 通过显式 frame stack 解析 RESP2/RESP3 aggregate，不使用递归；
+  累积输入采用 compact buffer，Bulk payload 以流式状态写入最终值，避免碎片输入的整段
+  拼接与已完成节点的反复解析。
+- 解析器严格校验 line 的 `CRLF`、Bulk trailer、RESP3 Null、Boolean 与 Verbatim 结构。
+  任意协议格式错误或资源超限使 decoder 进入终止状态，连接层关闭相应 socket。
+- `RespLimits` 保护 buffer、顶层回复、Bulk、line、aggregate depth 和累计元素数；默认值
+  可由 `BobaStrawClient.Builder.respLimits(...)` 与
+  `BobaStrawClusterClient.Builder.respLimits(...)` 覆盖，并完整传入重连、事务、Pub/Sub 和
+  Cluster 节点连接。
+- 单元测试覆盖逐字节/任意边界碎片的嵌套 Attribute、连续 Push/普通回复、大 Bulk、输入
+  数组复用、非法 wire 和所有资源限制边界；socket 测试验证协议超限关闭连接并保留已写命令
+  的“可能已执行”语义。完整 `mvn test` 回归后才可进入阶段 5。
 
 ### 阶段 6 性能验收计划（待阶段 4、5 完成后执行）
 

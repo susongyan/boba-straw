@@ -6,7 +6,7 @@
 
 ## Protocol
 
-The decoder has one RESP value model. RESP2 is a subset; RESP3 Push, Attribute, Blob Error, Verbatim String and Big Number values are parsed. Attribute values are unwrapped only after they have been kept separate from Push messages, so they cannot shift normal request-response FIFO matching.
+The decoder has one RESP value model. RESP2 is a subset; RESP3 Push, Attribute, Blob Error, Verbatim String and Big Number values are parsed. Attribute values are unwrapped only after they have been kept separate from Push messages, so they cannot shift normal request-response FIFO matching. The decoder is an explicit incremental state machine with a compact input buffer and a non-recursive aggregate frame stack. `RespLimits` is enforced at this boundary; malformed or oversized replies terminate the physical connection rather than being truncated or retried.
 
 ## Failure semantics
 

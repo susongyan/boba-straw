@@ -1,5 +1,7 @@
 package io.github.susongyan.bobastraw.internal;
 
+import io.github.susongyan.bobastraw.protocol.RespLimits;
+
 import java.time.Duration;
 import java.util.ArrayDeque;
 import java.util.Deque;
@@ -22,6 +24,7 @@ public final class TransactionConnectionPool implements AutoCloseable {
     private final Duration acquireTimeout;
     private final Duration idleTimeout;
     private final NioConnectionFactory connectionFactory;
+    private final RespLimits respLimits;
     private final NioEventLoopGroup legacyOwnedEventLoops;
     private final Deque<IdleConnection> idle = new ArrayDeque<IdleConnection>();
     private final Set<NioConnection> active = new HashSet<NioConnection>();
@@ -65,7 +68,7 @@ public final class TransactionConnectionPool implements AutoCloseable {
     ) {
         this(host, port, timeout, protocol, username, password, clientName, maxSize,
             acquireTimeout, idleTimeout, new NioConnectionFactory(legacyOwnedEventLoops),
-            legacyOwnedEventLoops);
+            legacyOwnedEventLoops, RespLimits.defaults());
     }
 
     public TransactionConnectionPool(
@@ -82,7 +85,28 @@ public final class TransactionConnectionPool implements AutoCloseable {
         NioConnectionFactory connectionFactory
     ) {
         this(host, port, timeout, protocol, username, password, clientName, maxSize,
-            acquireTimeout, idleTimeout, connectionFactory, null);
+            acquireTimeout, idleTimeout, connectionFactory, null, RespLimits.defaults());
+    }
+
+    /**
+     * Creates a lazy transaction pool whose dedicated connections enforce {@code respLimits}.
+     */
+    public TransactionConnectionPool(
+        String host,
+        int port,
+        Duration timeout,
+        io.github.susongyan.bobastraw.ProtocolVersion protocol,
+        String username,
+        String password,
+        String clientName,
+        int maxSize,
+        Duration acquireTimeout,
+        Duration idleTimeout,
+        NioConnectionFactory connectionFactory,
+        RespLimits respLimits
+    ) {
+        this(host, port, timeout, protocol, username, password, clientName, maxSize,
+            acquireTimeout, idleTimeout, connectionFactory, null, respLimits);
     }
 
     private TransactionConnectionPool(
@@ -97,10 +121,14 @@ public final class TransactionConnectionPool implements AutoCloseable {
         Duration acquireTimeout,
         Duration idleTimeout,
         NioConnectionFactory connectionFactory,
-        NioEventLoopGroup legacyOwnedEventLoops
+        NioEventLoopGroup legacyOwnedEventLoops,
+        RespLimits respLimits
     ) {
         if (maxSize < 1) {
             throw new IllegalArgumentException("maxSize must be positive");
+        }
+        if (respLimits == null) {
+            throw new IllegalArgumentException("respLimits must not be null");
         }
         this.host = host;
         this.port = port;
@@ -113,6 +141,7 @@ public final class TransactionConnectionPool implements AutoCloseable {
         this.acquireTimeout = acquireTimeout;
         this.idleTimeout = idleTimeout;
         this.connectionFactory = connectionFactory;
+        this.respLimits = respLimits;
         this.legacyOwnedEventLoops = legacyOwnedEventLoops;
         this.reaper = Executors.newSingleThreadScheduledExecutor(runnable -> {
             Thread thread = new Thread(runnable, "boba-straw-transaction-reaper");
@@ -144,7 +173,7 @@ public final class TransactionConnectionPool implements AutoCloseable {
                 created++;
                 NioConnection connection = connectionFactory.create(
                     host, port, timeout, protocol, username, password, clientName,
-                    null, Duration.ZERO
+                    null, Duration.ZERO, respLimits
                 );
                 active.add(connection);
                 return connection;

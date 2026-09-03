@@ -2,6 +2,7 @@ package io.github.susongyan.bobastraw;
 
 import io.github.susongyan.bobastraw.internal.NioConnection;
 import io.github.susongyan.bobastraw.internal.NioConnectionFactory;
+import io.github.susongyan.bobastraw.protocol.RespLimits;
 import io.github.susongyan.bobastraw.protocol.RespValue;
 
 import java.time.Duration;
@@ -25,6 +26,7 @@ public final class BobaStrawClusterClient implements AutoCloseable {
     private final BobaStrawClientResources resources;
     private final boolean ownsResources;
     private final NioConnectionFactory connectionFactory;
+    private final RespLimits respLimits;
     private final Map<Integer, Node> slots = new HashMap<Integer, Node>();
     private final Map<String, Node> nodes = new HashMap<String, Node>();
     private final Object lock = new Object();
@@ -36,6 +38,7 @@ public final class BobaStrawClusterClient implements AutoCloseable {
             throw new BobaStrawConnectionException("Boba Straw client resources are closed");
         }
         this.connectionFactory = resources.connectionFactory();
+        this.respLimits = builder.respLimits;
         this.timeout = builder.timeout;
         this.protocol = builder.protocol;
         this.username = builder.username;
@@ -149,7 +152,8 @@ public final class BobaStrawClusterClient implements AutoCloseable {
                 return existing;
             }
             Node created = new Node(connectionFactory.create(
-                host, port, timeout, protocol, username, password, clientName, null, Duration.ZERO
+                host, port, timeout, protocol, username, password, clientName, null,
+                Duration.ZERO, respLimits
             ));
             nodes.put(id, created);
             return created;
@@ -229,6 +233,7 @@ public final class BobaStrawClusterClient implements AutoCloseable {
         private String password;
         private String clientName;
         private BobaStrawClientResources resources;
+        private RespLimits respLimits = RespLimits.defaults();
 
         private Builder() {
             seeds.add(new Seed("localhost", 6379));
@@ -271,6 +276,15 @@ public final class BobaStrawClusterClient implements AutoCloseable {
 
         public Builder protocol(ProtocolVersion value) {
             this.protocol = value == null ? ProtocolVersion.AUTO : value;
+            return this;
+        }
+
+        /** Sets inbound RESP resource limits for every Cluster node connection. */
+        public Builder respLimits(RespLimits value) {
+            if (value == null) {
+                throw new IllegalArgumentException("respLimits must not be null");
+            }
+            this.respLimits = value;
             return this;
         }
 

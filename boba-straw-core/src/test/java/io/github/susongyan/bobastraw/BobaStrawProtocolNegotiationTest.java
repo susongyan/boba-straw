@@ -1,6 +1,6 @@
 package io.github.susongyan.bobastraw;
 
-import org.junit.jupiter.api.Test;
+import io.github.susongyan.bobastraw.protocol.RespLimits;
 
 import java.io.BufferedInputStream;
 import java.io.BufferedOutputStream;
@@ -15,6 +15,8 @@ import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
+
+import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -190,6 +192,40 @@ class BobaStrawProtocolNegotiationTest {
                 throw new AssertionError("Expected the connection failure to reach the caller");
             } catch (java.util.concurrent.ExecutionException error) {
                 assertTrue(error.getCause() instanceof BobaStrawCommandMayHaveExecutedException);
+            }
+        }
+
+        assertTrue(server.awaitCompletion());
+        server.close();
+    }
+
+    @Test
+    void protocolLimitClosesTheConnectionAndPreservesAmbiguousDelivery() throws Exception {
+        FakeRedisServer server = new FakeRedisServer(new SessionHandler() {
+            @Override
+            public void handle(Session session) throws IOException {
+                assertEquals(Arrays.asList("GET", "value"), session.readCommand());
+                session.write("$4\r\nmilk\r\n");
+                session.awaitClientClose();
+            }
+        });
+        server.start();
+
+        RespLimits limits = RespLimits.builder()
+            .maxBulkLength(3)
+            .build();
+        try (BobaStrawClient client = BobaStrawClient.builder()
+            .endpoint("127.0.0.1", server.port())
+            .protocol(ProtocolVersion.RESP2)
+            .respLimits(limits)
+            .commandTimeout(Duration.ofSeconds(2))
+            .build()) {
+            try {
+                client.async().get("value").toCompletableFuture().get(2, TimeUnit.SECONDS);
+                throw new AssertionError("Expected the protocol failure to reach the caller");
+            } catch (java.util.concurrent.ExecutionException error) {
+                assertTrue(error.getCause() instanceof BobaStrawCommandMayHaveExecutedException);
+                assertTrue(error.getCause().getCause() instanceof BobaStrawProtocolException);
             }
         }
 
@@ -487,8 +523,13 @@ class BobaStrawProtocolNegotiationTest {
         }
 
         private void awaitClientClose() throws IOException {
-            while (input.read() >= 0) {
-                // The client owns the connection lifecycle and closes after the assertion.
+            try {
+                while (input.read() >= 0) {
+                    // The client owns the connection lifecycle and closes after the assertion.
+                }
+            } catch (java.net.SocketException ignored) {
+                // Once expected command and response assertions have completed, a peer TCP RST
+                // is equivalent to EOF for this test fixture.
             }
         }
 

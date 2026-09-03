@@ -24,6 +24,23 @@ BobaStrawClient.builder()
     .build();
 ```
 
+默认 decoder 会限制单条回复、Bulk、嵌套层数和 aggregate 元素数，防止异常服务端回复占满
+客户端内存。需要读取较大的 value 或集合时，可以显式提高限制；格式错误或超限回复会关闭
+该物理连接，已写命令仍按“可能已执行”报告，不会自动重试：
+
+```java
+RespLimits limits = RespLimits.builder()
+    .maxResponseBytes(128 * 1024 * 1024)
+    .maxBulkLength(96 * 1024 * 1024)
+    .maxAggregateElements(200_000)
+    .build();
+
+BobaStrawClient client = BobaStrawClient.builder()
+    .uri("redis://localhost:6379")
+    .respLimits(limits)
+    .build();
+```
+
 普通命令默认按每个 Redis 节点复用一个共享多路复用连接，不需要配置连接池大小。事务、Pub/Sub 和阻塞命令使用独立连接。
 
 默认每个 Client 自己管理一个 Selector EventLoop。应用中有多个 Client、Cluster 或专用连接时，

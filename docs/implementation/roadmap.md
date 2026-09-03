@@ -36,7 +36,7 @@
 - [x] 阶段 1：连接队列状态收敛和取消/FIFO 安全
 - [x] 阶段 2：共享 Selector EventLoopGroup
 - [x] 阶段 3：读缓冲复用、gathering write 与公平预算
-- [ ] 阶段 4：RESP 增量状态机与协议资源上限
+- [x] 阶段 4：RESP 增量状态机与协议资源上限
 - [ ] 阶段 5：统一 deadline、背压、回调与订阅分发隔离
 - [ ] 阶段 6：JMH、故障注入和负载验收
 
@@ -60,6 +60,14 @@ EventLoop turn 最多执行 256 个跨线程任务，单连接最多读 64 KiB�
 保持未发送 / 可能已执行的失败语义。`NioConnectionIoTest` 覆盖预算截断的大帧 FIFO
 写入、响应 burst 分片分发和同 loop 跨连接让出；完整 `mvn test` 已通过。
 
+阶段 4 验收记录：RESP decoder 现在使用可 compact 输入缓冲、流式 Bulk 状态和显式
+aggregate frame stack；不再拼接整段输入或递归重解析不完整 aggregate。严格 CRLF、Bulk
+trailer、Null、Boolean、Verbatim 校验可阻止畸形回复污染 FIFO。`RespLimits` 默认保护
+64 MiB buffer/顶层回复、32 MiB Bulk、64 KiB line、64 层嵌套和 100,000 个 aggregate
+child；可在 Standalone 或 Cluster Builder 配置，并会传递到重连、事务、Pub/Sub 和所有
+Cluster node 连接。越限/畸形回复会关闭连接，已写请求仍明确报告“可能已执行”，绝不重试。
+逐字节 Attribute、大 Bulk、非法 wire、限制边界与 socket 级断连分类均有回归测试。
+
 阶段 6 性能验收计划：在阶段 4、5 完成后直接探测并安装缺少的本机 JDK、JMH、Colima
 容器镜像和观测工具；保留阶段 2 提交 `ca078f4` 与网络模型最终提交的可复跑基线。测试
 Redis 与 Valkey 的单命令、Pipeline、大 value、碎片响应、多 Client 共享 EventLoop 和
@@ -72,6 +80,8 @@ Redis 与 Valkey 的单命令、Pipeline、大 value、碎片响应、多 Client
 - [x] RESP3 Map、Set、Push、Attribute
 - [x] RESP3 Blob Error、Verbatim String、Big Number
 - [x] 增量解析和碎片输入
+- [x] 显式非递归 RESP frame stack 与可配置协议资源上限
+- [x] 严格 RESP line / Bulk trailer 校验与协议失败终止连接
 - [x] FIFO 请求/响应匹配
 - [x] Attribute 不影响普通响应匹配
 - [x] AUTO 使用 HELLO 3
