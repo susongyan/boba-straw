@@ -2,6 +2,7 @@ package io.github.susongyan.bobastraw.internal;
 
 import io.github.susongyan.bobastraw.BobaStrawCommandMayHaveExecutedException;
 import io.github.susongyan.bobastraw.BobaStrawCommandNotSentException;
+import io.github.susongyan.bobastraw.BobaStrawCommandTimeoutException;
 import io.github.susongyan.bobastraw.BobaStrawConnectionException;
 import io.github.susongyan.bobastraw.ProtocolVersion;
 import io.github.susongyan.bobastraw.protocol.RespCodec;
@@ -51,7 +52,6 @@ public final class NioConnection implements AutoCloseable {
     private volatile BobaStrawConnectionException terminalError;
     private long lastActivityNanos = System.nanoTime();
     private boolean healthCheckInFlight;
-    private long healthCheckDeadlineNanos;
     private boolean readyForCommands;
     private boolean bufferedResponsesPending;
     private int responseBudgetRemainingThisTurn;
@@ -254,7 +254,7 @@ public final class NioConnection implements AutoCloseable {
         List<CompletableFuture<RespValue>> futures = new ArrayList<CompletableFuture<RespValue>>();
         final List<Request> requests = new ArrayList<Request>(commands.size());
         for (String[] command : commands) {
-            Request request = new Request(ByteBuffer.wrap(RespCodec.encodeCommand(command)));
+            Request request = newRequest(RespCodec.encodeCommand(command));
             requests.add(request);
             futures.add(request.future);
         }
@@ -307,6 +307,17 @@ public final class NioConnection implements AutoCloseable {
 
     public Duration idlePingInterval() {
         return idlePingInterval;
+    }
+
+    /** Schedules internal connection work on this connection's EventLoop. */
+    public void schedule(Runnable action, Duration delay) {
+        if (action == null) {
+            throw new IllegalArgumentException("scheduled action must not be null");
+        }
+        if (delay == null || delay.isNegative()) {
+            throw new IllegalArgumentException("scheduled delay must not be negative");
+        }
+        eventLoop.schedule(action, delay.toNanos());
     }
 
     void register(Selector selector) throws IOException {
@@ -375,6 +386,17 @@ public final class NioConnection implements AutoCloseable {
         return enqueueConnected(command).future;
     }
 
+    private Request newRequest(byte[] encoded) {
+        final Request request = new Request(ByteBuffer.wrap(encoded));
+        request.future.whenComplete((value, error) -> {
+            NioEventLoop.ScheduledTask deadline = request.deadline;
+            if (deadline != null) {
+                deadline.cancel();
+            }
+        });
+        return request;
+    }
+
     private Request enqueueExternal(String[] command) {
         return enqueueExternal(RespCodec.encodeCommand(command));
     }
@@ -384,15 +406,20 @@ public final class NioConnection implements AutoCloseable {
     }
 
     private Request enqueueExternal(byte[] encoded) {
-        final Request request = new Request(ByteBuffer.wrap(encoded));
+        final Request request = newRequest(encoded);
         submit(new ConnectionTask() {
             @Override
             public void run() {
+                if (request.cancellationRequested) {
+                    cancelQueuedRequest(request);
+                    return;
+                }
                 if (readyForCommands) {
                     outbound.add(request);
                 } else {
                     preReady.add(request);
                 }
+                scheduleRequestDeadline(request);
             }
 
             @Override
@@ -407,10 +434,25 @@ public final class NioConnection implements AutoCloseable {
         submit(new ConnectionTask() {
             @Override
             public void run() {
+                for (Request request : requests) {
+                    if (request.cancellationRequested) {
+                        cancelQueuedRequest(request);
+                    }
+                }
                 if (readyForCommands) {
-                    outbound.addAll(requests);
+                    for (Request request : requests) {
+                        if (!request.cancellationRequested) {
+                            outbound.add(request);
+                            scheduleRequestDeadline(request);
+                        }
+                    }
                 } else {
-                    preReady.addAll(requests);
+                    for (Request request : requests) {
+                        if (!request.cancellationRequested) {
+                            preReady.add(request);
+                            scheduleRequestDeadline(request);
+                        }
+                    }
                 }
             }
 
@@ -428,11 +470,16 @@ public final class NioConnection implements AutoCloseable {
     }
 
     private Request enqueueConnected(byte[] encoded) {
-        final Request request = new Request(ByteBuffer.wrap(encoded));
+        final Request request = newRequest(encoded);
         submit(new ConnectionTask() {
             @Override
             public void run() {
+                if (request.cancellationRequested) {
+                    cancelQueuedRequest(request);
+                    return;
+                }
                 outbound.add(request);
+                scheduleRequestDeadline(request);
             }
 
             @Override
@@ -444,6 +491,7 @@ public final class NioConnection implements AutoCloseable {
     }
 
     private void cancel(final Request request) {
+        request.cancellationRequested = true;
         submit(new ConnectionTask() {
             @Override
             public void run() {
@@ -500,14 +548,57 @@ public final class NioConnection implements AutoCloseable {
     private void cancelOnEventLoop(Request request) {
         if (request.state == RequestState.QUEUED) {
             if (outbound.remove(request) || preReady.remove(request)) {
-                request.state = RequestState.CANCELLED;
-                request.future.completeExceptionally(new java.util.concurrent.CancellationException());
+                cancelQueuedRequest(request);
             }
             return;
         }
         if (request.state == RequestState.WRITING || request.state == RequestState.SENT) {
             request.state = RequestState.CANCELLED_DRAINING;
             request.future.completeExceptionally(new java.util.concurrent.CancellationException());
+        }
+    }
+
+    private void cancelQueuedRequest(Request request) {
+        request.state = RequestState.CANCELLED;
+        request.future.completeExceptionally(new java.util.concurrent.CancellationException());
+    }
+
+    private void scheduleRequestDeadline(final Request request) {
+        long timeoutNanos = timeout.toNanos();
+        long elapsedNanos = System.nanoTime() - request.createdAtNanos;
+        long delayNanos = elapsedNanos >= timeoutNanos ? 0L : timeoutNanos - elapsedNanos;
+        request.deadline = eventLoop.schedule(new Runnable() {
+            @Override
+            public void run() {
+                timeoutRequestOnEventLoop(request);
+            }
+        }, delayNanos);
+        if (request.future.isDone()) {
+            request.deadline.cancel();
+        }
+    }
+
+    private void timeoutRequestOnEventLoop(Request request) {
+        if (request.future.isDone()) {
+            return;
+        }
+        if (request.state == RequestState.QUEUED) {
+            if (outbound.remove(request) || preReady.remove(request)) {
+                request.state = RequestState.CANCELLED;
+                request.future.completeExceptionally(new BobaStrawCommandTimeoutException(
+                    "Redis command timed out before any command bytes were written", null, false
+                ));
+            }
+            return;
+        }
+        if (request.state == RequestState.WRITING || request.state == RequestState.SENT) {
+            request.state = RequestState.CANCELLED_DRAINING;
+            request.future.completeExceptionally(new BobaStrawCommandTimeoutException(
+                "Redis command timed out after command bytes may have been written; "
+                    + "the command may have executed",
+                null,
+                true
+            ));
         }
     }
 
@@ -856,9 +947,6 @@ public final class NioConnection implements AutoCloseable {
         }
         long now = System.nanoTime();
         if (healthCheckInFlight) {
-            if (now - healthCheckDeadlineNanos >= 0L) {
-                onIoFailure(new BobaStrawConnectionException("Idle Redis health check timed out"));
-            }
             return;
         }
         if (!outbound.isEmpty() || !pending.isEmpty()
@@ -866,7 +954,6 @@ public final class NioConnection implements AutoCloseable {
             return;
         }
         healthCheckInFlight = true;
-        healthCheckDeadlineNanos = now + timeout.toNanos();
         executeConnected(new String[] { "PING" }).whenComplete((value, error) -> {
             healthCheckInFlight = false;
             lastActivityNanos = System.nanoTime();
@@ -990,7 +1077,10 @@ public final class NioConnection implements AutoCloseable {
     private static final class Request {
         private final ByteBuffer buffer;
         private final CompletableFuture<RespValue> future = new CompletableFuture<RespValue>();
+        private final long createdAtNanos = System.nanoTime();
         private RequestState state = RequestState.QUEUED;
+        private volatile boolean cancellationRequested;
+        private volatile NioEventLoop.ScheduledTask deadline;
         private boolean bytesWritten;
         private boolean writeMayHaveReachedServer;
 

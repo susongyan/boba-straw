@@ -30,7 +30,11 @@ factory 分配给固定 EventLoop；连接创建后不迁移。默认 Client 自
 阶段 4 已将 decoder 改为显式的增量状态机：它使用可 compact 的输入缓冲、流式 Bulk
 状态和非递归 aggregate frame stack，不再对不完整回复反复重解析或拼接整个输入数组。
 `RespLimits` 在 decoder 内强制执行，并从 Standalone、重连、事务专用池、Pub/Sub 专用
-连接和 Cluster 每个节点连接统一传递。显式背压、统一 deadline 和回调隔离仍属于阶段 5。
+连接和 Cluster 每个节点连接统一传递。
+
+阶段 5A 已将命令、握手、空闲 PING 和固定间隔的共享连接重连检查，收敛到所属
+`NioEventLoop` 的可取消 deadline 队列。deadline 从请求创建时开始计时；在请求正常结束、
+取消或连接关闭后会被取消或跳过。回调隔离、容量背压和退避重连仍属于阶段 5 的后续子阶段。
 
 ## 目标结构
 
@@ -41,7 +45,7 @@ flowchart LR
     Resources["BobaStrawClientResources"] --> Loop1
     Resources --> Loop2["NioEventLoop 2"]
     Resources --> LoopN["NioEventLoop N"]
-    Loop1 --> Selector1["Selector（阶段 5 增加 deadline queue）"]
+    Loop1 --> Selector1["Selector + deadline queue"]
     Selector1 --> A["NioConnection A"]
     Selector1 --> B["NioConnection B"]
     Loop2 --> C["NioConnection C"]
@@ -53,8 +57,7 @@ application threads
   | submit / cancel / close
   v
 per-event-loop MPSC task queue -- wakeup --> NioEventLoop
-                                             | Selector
-                                             | deadline queue（阶段 5）
+                                             | Selector + deadline queue
                                              +-- NioConnection A
                                              +-- NioConnection B
                                              +-- NioConnection C
@@ -229,9 +232,15 @@ Attribute 不会抢占 Push 或普通回复的 FIFO 位置。
 
 ## Deadline、健康检查与背压
 
-阶段 5 将使每个 EventLoop 持有 deadline 队列，统一管理命令超时、空闲 PING 和重连退避；
-已完成请求的 deadline 必须被取消或跳过，不能无限积累定时任务。当前的命令超时与重连
-调度尚未完成这项统一收敛。
+阶段 5A 已使每个 EventLoop 持有 deadline 队列，统一管理命令超时、握手、空闲 PING 和
+固定间隔的共享连接重连检查。deadline 使用单调时钟；请求在创建时开始计时，已完成、取消或
+关闭的请求会取消其 deadline，过期的请求只在所属 EventLoop 上改变队列状态。未发送的超时
+请求返回“未发送”语义；已开始写入的超时请求进入 `CANCELLED_DRAINING`，仍保留协议占位，
+并返回“可能已执行”语义。调用方可通过
+`BobaStrawCommandTimeoutException.mayHaveExecuted()` 读取这一区分。
+同步 API 只等待同一异步请求的结果，不再建立第二套独立的超时定时器。
+
+当前重连仍是固定间隔检查，不重放任何命令。指数退避、连接状态与更细粒度指标属于后续子阶段。
 
 连接必须提供有界保护：最大 in-flight 命令数、最大待写字节、最大 RESP 响应、
 最大 Pub/Sub 分发积压。超限时本地明确拒绝，不能静默丢弃或无限缓存。
@@ -300,6 +309,17 @@ Attribute 不会抢占 Push 或普通回复的 FIFO 位置。
 - 单元测试覆盖逐字节/任意边界碎片的嵌套 Attribute、连续 Push/普通回复、大 Bulk、输入
   数组复用、非法 wire 和所有资源限制边界；socket 测试验证协议超限关闭连接并保留已写命令
   的“可能已执行”语义。完整 `mvn test` 回归后才可进入阶段 5。
+
+### 阶段 5A 验收（已完成，阶段 5 其余部分仍进行中）
+
+- 每个 `NioEventLoop` 使用自己的可取消 deadline 队列，并在 selector 等待前以最近 deadline
+  计算等待时间；到期任务和普通 NIO I/O 都只在该 EventLoop 上执行。
+- 普通命令、握手命令和空闲 PING 共享同一请求 deadline 模型。取消或超时的已写请求保留
+  `CANCELLED_DRAINING` 响应占位，不能让后续响应错配。
+- 共享连接的固定间隔重连检查由其当前连接所属 EventLoop 调度；Client 关闭或连接替换通过
+  generation 使旧检查失效。检查仅创建新连接，绝不重发失败或超时命令。
+- `NioEventLoopDeadlineTest` 覆盖 deadline 所属线程、取消和 EventLoop 存活；协议 socket
+  测试覆盖命令 deadline。完整 `mvn test` 回归后才可继续阶段 5B。
 
 ### 阶段 6 性能验收计划（待阶段 4、5 完成后执行）
 

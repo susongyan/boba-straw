@@ -8,28 +8,18 @@ import io.github.susongyan.bobastraw.protocol.RespValue;
 
 import java.net.URI;
 import java.time.Duration;
-import java.util.concurrent.CompletionStage;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.ScheduledFuture;
-import java.util.concurrent.atomic.AtomicLong;
-import java.util.Set;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
+import java.util.concurrent.CompletionStage;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Thread-safe Redis client. The first implementation targets standalone Redis;
  * the public builder deliberately leaves room for Sentinel and Cluster routing.
  */
 public final class BobaStrawClient implements AutoCloseable {
-    private static final ScheduledExecutorService TIMEOUTS =
-        Executors.newScheduledThreadPool(1, runnable -> {
-            Thread thread = new Thread(runnable, "boba-straw-timeouts");
-            thread.setDaemon(true);
-            return thread;
-        });
     private volatile NioConnection connection;
     private final BobaStrawClientResources resources;
     private final boolean ownsResources;
@@ -38,10 +28,11 @@ public final class BobaStrawClient implements AutoCloseable {
     private final RespLimits respLimits;
     private final BobaStrawSyncCommands sync;
     private final BobaStrawAsyncCommands async;
+    private final Duration reconnectInterval;
     private final Set<NioConnection> dedicatedConnections =
         Collections.synchronizedSet(new HashSet<NioConnection>());
     private volatile boolean closed;
-    private final ScheduledFuture<?> reconnectTask;
+    private long reconnectGeneration;
     private final AtomicLong connectionCreations = new AtomicLong();
     private final AtomicLong reconnects = new AtomicLong();
     private final int transactionPoolMaxSize;
@@ -58,23 +49,11 @@ public final class BobaStrawClient implements AutoCloseable {
         this.connectionFactory = resources.connectionFactory();
         this.commandTimeout = builder.commandTimeout;
         this.respLimits = builder.respLimits;
+        this.reconnectInterval = builder.reconnectInterval;
         this.connection = createConnection(builder.host, builder.port, builder.commandTimeout,
             builder.protocolVersion, builder.username, builder.password, builder.clientName,
             builder.idlePingInterval);
-        reconnectTask = builder.reconnectInterval.isZero() ? null : TIMEOUTS.scheduleAtFixedRate(() -> {
-            if (!closed && resources.isOpen() && !connection.isOpen()) {
-                synchronized (this) {
-                    if (!closed && resources.isOpen() && !connection.isOpen()) {
-                        connection = createConnection(
-                            connection.host(), connection.port(), commandTimeout,
-                            connection.protocol(), connection.username(), connection.password(),
-                            connection.clientName(), connection.idlePingInterval()
-                        );
-                        reconnects.incrementAndGet();
-                    }
-                }
-            }
-        }, builder.reconnectInterval.toMillis(), builder.reconnectInterval.toMillis(), TimeUnit.MILLISECONDS);
+        scheduleReconnectCheck();
         this.transactionPoolMaxSize = builder.transactionPoolMaxSize;
         this.transactionAcquireTimeout = builder.transactionAcquireTimeout;
         this.transactionIdleTimeout = builder.transactionIdleTimeout;
@@ -147,22 +126,7 @@ public final class BobaStrawClient implements AutoCloseable {
         byte[][] all = new byte[arguments.length + 1][];
         all[0] = command;
         System.arraycopy(arguments, 0, all, 1, arguments.length);
-        CompletionStage<RespValue> operation = sharedConnection().execute(all);
-        java.util.concurrent.CompletableFuture<RespValue> result =
-            new java.util.concurrent.CompletableFuture<RespValue>();
-        operation.whenComplete((value, error) -> {
-            if (error == null) {
-                result.complete(value);
-            } else {
-                result.completeExceptionally(error);
-            }
-        });
-        result.whenComplete((value, error) -> {
-            if (result.isCancelled()) {
-                operation.toCompletableFuture().cancel(false);
-            }
-        });
-        return result;
+        return sharedConnection().execute(all);
     }
 
     private synchronized NioConnection sharedConnection() {
@@ -175,6 +139,7 @@ public final class BobaStrawClient implements AutoCloseable {
             connection.protocol(), connection.username(), connection.password(),
             connection.clientName(), connection.idlePingInterval()
         );
+        scheduleReconnectCheck();
         return connection;
     }
 
@@ -188,63 +153,49 @@ public final class BobaStrawClient implements AutoCloseable {
         String clientName,
         Duration idlePingInterval
     ) {
-        return connectionFactory.create(host, port, timeout, protocol, username, password, clientName,
+        NioConnection created = connectionFactory.create(
+            host, port, timeout, protocol, username, password, clientName,
             null, idlePingInterval, respLimits);
+        connectionCreations.incrementAndGet();
+        return created;
     }
 
     CompletionStage<RespValue> executeOn(NioConnection target, String command, String... arguments) {
         String[] all = new String[arguments.length + 1];
         all[0] = command;
         System.arraycopy(arguments, 0, all, 1, arguments.length);
-        CompletionStage<RespValue> operation = target.execute(all);
-        java.util.concurrent.CompletableFuture<RespValue> result =
-            new java.util.concurrent.CompletableFuture<RespValue>();
-        operation.whenComplete((value, error) -> {
-            if (error == null) {
-                result.complete(value);
-            } else {
-                result.completeExceptionally(error);
-            }
-        });
-        result.whenComplete((value, error) -> {
-            if (result.isCancelled()) {
-                operation.toCompletableFuture().cancel(false);
-            }
-        });
-        TIMEOUTS.schedule(() -> {
-            if (result.completeExceptionally(new BobaStrawCommandTimeoutException(
-                "Command timed out; it may have been executed by Redis", null
-            ))) {
-                operation.toCompletableFuture().cancel(false);
-            }
-        }, commandTimeout.toNanos(), TimeUnit.NANOSECONDS);
-        return result;
+        return target.execute(all);
     }
 
     CompletionStage<List<RespValue>> executeBatch(List<String[]> commands) {
-        CompletionStage<List<RespValue>> operation = sharedConnection().executeBatch(commands);
-        java.util.concurrent.CompletableFuture<List<RespValue>> result =
-            new java.util.concurrent.CompletableFuture<List<RespValue>>();
-        operation.whenComplete((value, error) -> {
-            if (error == null) {
-                result.complete(value);
-            } else {
-                result.completeExceptionally(error);
+        return sharedConnection().executeBatch(commands);
+    }
+
+    private synchronized void scheduleReconnectCheck() {
+        if (closed || reconnectInterval.isZero() || !resources.isOpen()) {
+            return;
+        }
+        final long generation = ++reconnectGeneration;
+        final NioConnection scheduledConnection = connection;
+        scheduledConnection.schedule(new Runnable() {
+            @Override
+            public void run() {
+                synchronized (BobaStrawClient.this) {
+                    if (closed || !resources.isOpen() || generation != reconnectGeneration) {
+                        return;
+                    }
+                    if (!connection.isOpen()) {
+                        connection = createConnection(
+                            connection.host(), connection.port(), commandTimeout,
+                            connection.protocol(), connection.username(), connection.password(),
+                            connection.clientName(), connection.idlePingInterval()
+                        );
+                        reconnects.incrementAndGet();
+                    }
+                    scheduleReconnectCheck();
+                }
             }
-        });
-        result.whenComplete((value, error) -> {
-            if (result.isCancelled()) {
-                operation.toCompletableFuture().cancel(false);
-            }
-        });
-        TIMEOUTS.schedule(() -> {
-            if (result.completeExceptionally(new BobaStrawCommandTimeoutException(
-                "Pipeline timed out; commands may have been executed by Redis", null
-            ))) {
-                operation.toCompletableFuture().cancel(false);
-            }
-        }, commandTimeout.toNanos(), TimeUnit.NANOSECONDS);
-        return result;
+        }, reconnectInterval);
     }
 
     NioConnection openPubSubConnection(java.util.function.Consumer<RespValue> listener) {
@@ -277,14 +228,12 @@ public final class BobaStrawClient implements AutoCloseable {
 
     <T> T await(CompletionStage<T> result) {
         try {
-            return result.toCompletableFuture().get(
-                commandTimeout.toMillis(),
-                java.util.concurrent.TimeUnit.MILLISECONDS
-            );
-        } catch (java.util.concurrent.TimeoutException e) {
-            throw new BobaStrawCommandTimeoutException(
-                "Command timed out; it may have been executed by Redis",
-                e
+            return result.toCompletableFuture().get();
+        } catch (InterruptedException error) {
+            Thread.currentThread().interrupt();
+            throw new BobaStrawConnectionException(
+                "Interrupted while waiting for a Redis command",
+                error
             );
         } catch (Exception e) {
             Throwable cause = e.getCause() == null ? e : e.getCause();
@@ -298,8 +247,8 @@ public final class BobaStrawClient implements AutoCloseable {
     @Override
     public void close() {
         closed = true;
-        if (reconnectTask != null) {
-            reconnectTask.cancel(false);
+        synchronized (this) {
+            reconnectGeneration++;
         }
         connection.close();
         synchronized (this) {

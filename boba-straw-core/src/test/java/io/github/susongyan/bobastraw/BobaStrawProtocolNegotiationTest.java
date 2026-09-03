@@ -234,6 +234,72 @@ class BobaStrawProtocolNegotiationTest {
     }
 
     @Test
+    void commandTimeoutIsOwnedByTheConnectionEventLoop() throws Exception {
+        FakeRedisServer server = new FakeRedisServer(new SessionHandler() {
+            @Override
+            public void handle(Session session) throws IOException {
+                assertEquals(Arrays.asList("GET", "slow"), session.readCommand());
+                session.awaitClientClose();
+            }
+        });
+        server.start();
+
+        try (BobaStrawClient client = BobaStrawClient.builder()
+            .endpoint("127.0.0.1", server.port())
+            .protocol(ProtocolVersion.RESP2)
+            .commandTimeout(Duration.ofMillis(100))
+            .build()) {
+            try {
+                client.sync().get("slow");
+                throw new AssertionError("Expected the command deadline to reach the caller");
+            } catch (BobaStrawCommandTimeoutException error) {
+                assertTrue(error.mayHaveExecuted());
+            }
+        }
+
+        assertTrue(server.awaitCompletion());
+        server.close();
+    }
+
+    @Test
+    void timedOutResponseIsDrainedBeforeTheFollowingCommandCompletes() throws Exception {
+        CountDownLatch firstCommandReceived = new CountDownLatch(1);
+        FakeRedisServer server = new FakeRedisServer(new SessionHandler() {
+            @Override
+            public void handle(Session session) throws IOException {
+                assertEquals(Arrays.asList("GET", "first"), session.readCommand());
+                firstCommandReceived.countDown();
+                assertEquals(Arrays.asList("GET", "second"), session.readCommand());
+                session.write("$3\r\none\r\n$3\r\ntwo\r\n");
+                session.awaitClientClose();
+            }
+        });
+        server.start();
+
+        try (BobaStrawClient client = BobaStrawClient.builder()
+            .endpoint("127.0.0.1", server.port())
+            .protocol(ProtocolVersion.RESP2)
+            .commandTimeout(Duration.ofMillis(100))
+            .build()) {
+            java.util.concurrent.CompletableFuture<String> first =
+                client.async().get("first").toCompletableFuture();
+            assertTrue(firstCommandReceived.await(2, TimeUnit.SECONDS));
+            try {
+                first.get(2, TimeUnit.SECONDS);
+                throw new AssertionError("Expected the first command to time out");
+            } catch (java.util.concurrent.ExecutionException error) {
+                assertTrue(error.getCause() instanceof BobaStrawCommandTimeoutException);
+            }
+
+            assertEquals("two", client.async().get("second").toCompletableFuture()
+                .get(2, TimeUnit.SECONDS));
+        }
+
+        assertTrue(server.awaitCompletion());
+        server.close();
+    }
+
+    @Test
     void connectionFailureBeforeHandshakeReportsThatTheCommandWasNotSent() throws Exception {
         ServerSocket reservation = new ServerSocket(0);
         int unavailablePort = reservation.getLocalPort();

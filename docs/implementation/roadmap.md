@@ -37,7 +37,7 @@
 - [x] 阶段 2：共享 Selector EventLoopGroup
 - [x] 阶段 3：读缓冲复用、gathering write 与公平预算
 - [x] 阶段 4：RESP 增量状态机与协议资源上限
-- [ ] 阶段 5：统一 deadline、背压、回调与订阅分发隔离
+- [~] 阶段 5：统一 deadline、背压、回调与订阅分发隔离
 - [ ] 阶段 6：JMH、故障注入和负载验收
 
 验收原则：普通命令无需业务配置连接池大小；连接池只服务于状态型场景。
@@ -67,6 +67,13 @@ trailer、Null、Boolean、Verbatim 校验可阻止畸形回复污染 FIFO。`Re
 child；可在 Standalone 或 Cluster Builder 配置，并会传递到重连、事务、Pub/Sub 和所有
 Cluster node 连接。越限/畸形回复会关闭连接，已写请求仍明确报告“可能已执行”，绝不重试。
 逐字节 Attribute、大 Bulk、非法 wire、限制边界与 socket 级断连分类均有回归测试。
+
+阶段 5A 验收记录：每个 Selector EventLoop 现在拥有可取消 deadline 队列，命令、握手、
+空闲 PING 和共享连接固定间隔重连检查都不再依赖全局定时线程。请求 deadline 从创建时
+开始计时；未写入时超时明确报告未发送，已写入时进入响应排空并明确报告可能已执行。取消的
+deadline 不会执行，Client 关闭或连接替换会使旧重连检查失效；不会自动重放命令。
+`NioEventLoopDeadlineTest` 与协议 socket 回归已覆盖。阶段 5 尚未完成：仍需有界 in-flight /
+待写字节、回调与 Pub/Sub listener 隔离、慢消费者策略、指数退避重连和状态/指标管理。
 
 阶段 6 性能验收计划：在阶段 4、5 完成后直接探测并安装缺少的本机 JDK、JMH、Colima
 容器镜像和观测工具；保留阶段 2 提交 `ca078f4` 与网络模型最终提交的可复跑基线。测试
