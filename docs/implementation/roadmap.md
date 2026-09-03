@@ -25,6 +25,7 @@
 - [x] 普通命令每个 Redis 节点一个共享多路复用连接
 - [x] 事务和 Pub/Sub 使用独占连接
 - [x] `BobaStrawClientResources` 共享固定数量的 Selector EventLoop
+- [x] 有界 callback dispatcher 与 Pub/Sub listener 串行隔离
 - [~] 状态型专用连接池（事务连接池已懒加载，Pub/Sub/阻塞命令待补）
 - [~] 共享连接失效检测、下一请求懒重连和固定间隔后台重连
 - [x] 可选空闲连接 PING 健康检测
@@ -72,8 +73,15 @@ Cluster node 连接。越限/畸形回复会关闭连接，已写请求仍明确
 空闲 PING 和共享连接固定间隔重连检查都不再依赖全局定时线程。请求 deadline 从创建时
 开始计时；未写入时超时明确报告未发送，已写入时进入响应排空并明确报告可能已执行。取消的
 deadline 不会执行，Client 关闭或连接替换会使旧重连检查失效；不会自动重放命令。
-`NioEventLoopDeadlineTest` 与协议 socket 回归已覆盖。阶段 5 尚未完成：仍需有界 in-flight /
-待写字节、回调与 Pub/Sub listener 隔离、慢消费者策略、指数退避重连和状态/指标管理。
+`NioEventLoopDeadlineTest` 与协议 socket 回归已覆盖。
+
+阶段 5B 验收记录：`BobaStrawClientResources` 现在还拥有有界 callback dispatcher，默认
+1 个 callback worker 和 1024 个排队位。普通命令在写入 Redis 前预留结果交付 slot；若已满，
+立即以 `BobaStrawBackpressureException` 拒绝且不发送命令。应用的 `CompletionStage`
+continuation 不再执行在 Selector EventLoop；同一 Pub/Sub 连接的 listener 通过串行 dispatcher
+保序执行。慢 listener 耗尽容量时关闭专用连接而非静默丢消息，关闭后会从 Client 专用连接集合
+移除。容量、隔离和慢消费者 socket 回归均已覆盖。阶段 5 尚未完成：仍需按连接的 in-flight /
+待写字节上限、指数退避重连和状态/指标管理。
 
 阶段 6 性能验收计划：在阶段 4、5 完成后直接探测并安装缺少的本机 JDK、JMH、Colima
 容器镜像和观测工具；保留阶段 2 提交 `ca078f4` 与网络模型最终提交的可复跑基线。测试

@@ -1,5 +1,6 @@
 package io.github.susongyan.bobastraw.internal;
 
+import io.github.susongyan.bobastraw.BobaStrawBackpressureException;
 import io.github.susongyan.bobastraw.BobaStrawCommandMayHaveExecutedException;
 import io.github.susongyan.bobastraw.BobaStrawCommandNotSentException;
 import io.github.susongyan.bobastraw.BobaStrawCommandTimeoutException;
@@ -42,6 +43,8 @@ public final class NioConnection implements AutoCloseable {
     private final Queue<Request> preReady = new ArrayDeque<Request>();
     private final RespCodec.Decoder decoder;
     private final Consumer<RespValue> pushListener;
+    private final BobaCallbackDispatcher callbackDispatcher;
+    private final BobaCallbackDispatcher.SerialDispatcher pushCallbacks;
     private final ByteBuffer readBuffer;
     private final ByteBuffer[] writeBuffers;
     private final Request[] writeRequests;
@@ -59,6 +62,10 @@ public final class NioConnection implements AutoCloseable {
     private int lastWriteFrameOriginalLimit;
     private SelectionKey key;
     private SocketChannel channel;
+    private Runnable closeListener;
+    private boolean resourcesClosing;
+    private boolean resourcesClosed;
+    private boolean closeListenerNotified;
 
     /**
      * @deprecated Internal compatibility constructor. Use BobaStrawClient or a shared
@@ -130,7 +137,7 @@ public final class NioConnection implements AutoCloseable {
         Duration idlePingInterval
     ) {
         this(legacyOwnedEventLoops.next(), host, port, timeout, requestedProtocol, username, password,
-            clientName, pushListener, idlePingInterval, legacyOwnedEventLoops, RespLimits.defaults());
+            clientName, pushListener, idlePingInterval, legacyOwnedEventLoops, RespLimits.defaults(), null);
     }
 
     NioConnection(
@@ -146,7 +153,7 @@ public final class NioConnection implements AutoCloseable {
         Duration idlePingInterval
     ) {
         this(eventLoop, host, port, timeout, requestedProtocol, username, password, clientName,
-            pushListener, idlePingInterval, null, RespLimits.defaults());
+            pushListener, idlePingInterval, null, RespLimits.defaults(), null);
     }
 
     NioConnection(
@@ -163,7 +170,25 @@ public final class NioConnection implements AutoCloseable {
         RespLimits respLimits
     ) {
         this(eventLoop, host, port, timeout, requestedProtocol, username, password, clientName,
-            pushListener, idlePingInterval, null, respLimits);
+            pushListener, idlePingInterval, null, respLimits, null);
+    }
+
+    NioConnection(
+        NioEventLoop eventLoop,
+        String host,
+        int port,
+        Duration timeout,
+        ProtocolVersion requestedProtocol,
+        String username,
+        String password,
+        String clientName,
+        Consumer<RespValue> pushListener,
+        Duration idlePingInterval,
+        RespLimits respLimits,
+        BobaCallbackDispatcher callbackDispatcher
+    ) {
+        this(eventLoop, host, port, timeout, requestedProtocol, username, password, clientName,
+            pushListener, idlePingInterval, null, respLimits, callbackDispatcher);
     }
 
     private NioConnection(
@@ -178,7 +203,8 @@ public final class NioConnection implements AutoCloseable {
         Consumer<RespValue> pushListener,
         Duration idlePingInterval,
         NioEventLoopGroup legacyOwnedEventLoops,
-        RespLimits respLimits
+        RespLimits respLimits,
+        BobaCallbackDispatcher callbackDispatcher
     ) {
         if (respLimits == null) {
             throw new IllegalArgumentException("respLimits must not be null");
@@ -194,6 +220,8 @@ public final class NioConnection implements AutoCloseable {
         this.password = password;
         this.clientName = clientName;
         this.pushListener = pushListener;
+        this.callbackDispatcher = callbackDispatcher;
+        this.pushCallbacks = callbackDispatcher == null ? null : callbackDispatcher.serialDispatcher();
         this.idlePingInterval = idlePingInterval == null ? Duration.ZERO : idlePingInterval;
         this.decoder = new RespCodec.Decoder(respLimits);
         this.readBuffer = ByteBuffer.allocate(ioLimits.readBufferSize);
@@ -215,35 +243,51 @@ public final class NioConnection implements AutoCloseable {
     }
 
     public CompletionStage<RespValue> execute(String[] command) {
-        final Request request = enqueueExternal(command);
-        final CompletableFuture<RespValue> result = new CompletableFuture<RespValue>();
-        request.future.whenComplete((value, requestError) -> {
-            if (requestError == null) {
-                result.complete(value);
-            } else {
-                result.completeExceptionally(requestError);
-            }
-        });
-        result.whenComplete((value, error) -> {
-            if (result.isCancelled()) {
-                cancel(request);
-            }
-        });
-        return result;
+        return executeExternal(RespCodec.encodeCommand(command));
     }
 
     public CompletionStage<RespValue> execute(byte[][] command) {
-        final Request request = enqueueExternal(command);
+        return executeExternal(RespCodec.encodeCommand(command));
+    }
+
+    private CompletionStage<RespValue> executeExternal(byte[] encoded) {
+        BobaCallbackDispatcher.Reservation reservation = reserveCallbackSlot();
+        if (callbackDispatcher != null && reservation == null) {
+            return failedStage(new BobaStrawBackpressureException(
+                "Boba Straw callback capacity is exhausted; Redis command was not sent"
+            ));
+        }
+        return exposeToCaller(enqueueExternal(encoded), reservation);
+    }
+
+    private CompletableFuture<RespValue> exposeToCaller(
+        final Request request,
+        final BobaCallbackDispatcher.Reservation reservation
+    ) {
         final CompletableFuture<RespValue> result = new CompletableFuture<RespValue>();
         request.future.whenComplete((value, requestError) -> {
-            if (requestError == null) {
-                result.complete(value);
-            } else {
-                result.completeExceptionally(requestError);
+            if (result.isDone()) {
+                releaseUndispatched(reservation);
+                return;
+            }
+            if (reservation == null) {
+                completeResult(result, value, requestError);
+                return;
+            }
+            if (!reservation.dispatch(new Runnable() {
+                @Override
+                public void run() {
+                    completeResult(result, value, requestError);
+                }
+            }) && !result.isDone()) {
+                result.completeExceptionally(new BobaStrawBackpressureException(
+                    "Boba Straw callback dispatcher closed before the Redis result could be delivered"
+                ));
             }
         });
         result.whenComplete((value, error) -> {
             if (result.isCancelled()) {
+                releaseUndispatched(reservation);
                 cancel(request);
             }
         });
@@ -251,12 +295,30 @@ public final class NioConnection implements AutoCloseable {
     }
 
     public CompletionStage<List<RespValue>> executeBatch(List<String[]> commands) {
-        List<CompletableFuture<RespValue>> futures = new ArrayList<CompletableFuture<RespValue>>();
-        final List<Request> requests = new ArrayList<Request>(commands.size());
+        List<byte[]> frames = new ArrayList<byte[]>(commands.size());
         for (String[] command : commands) {
-            Request request = newRequest(RespCodec.encodeCommand(command));
+            frames.add(RespCodec.encodeCommand(command));
+        }
+
+        List<BobaCallbackDispatcher.Reservation> reservations =
+            new ArrayList<BobaCallbackDispatcher.Reservation>(frames.size());
+        for (int index = 0; index < frames.size(); index++) {
+            BobaCallbackDispatcher.Reservation reservation = reserveCallbackSlot();
+            if (callbackDispatcher != null && reservation == null) {
+                releaseUndispatched(reservations);
+                return failedStage(new BobaStrawBackpressureException(
+                    "Boba Straw callback capacity is exhausted; Redis pipeline was not sent"
+                ));
+            }
+            reservations.add(reservation);
+        }
+
+        List<CompletableFuture<RespValue>> futures = new ArrayList<CompletableFuture<RespValue>>();
+        final List<Request> requests = new ArrayList<Request>(frames.size());
+        for (int index = 0; index < frames.size(); index++) {
+            Request request = newRequest(frames.get(index));
             requests.add(request);
-            futures.add(request.future);
+            futures.add(exposeToCaller(request, reservations.get(index)));
         }
         enqueueExternal(requests);
         CompletableFuture<?>[] all = futures.toArray(new CompletableFuture<?>[futures.size()]);
@@ -275,6 +337,42 @@ public final class NioConnection implements AutoCloseable {
             }
         });
         return aggregate;
+    }
+
+    private BobaCallbackDispatcher.Reservation reserveCallbackSlot() {
+        return callbackDispatcher == null ? null : callbackDispatcher.tryReserve();
+    }
+
+    private static void completeResult(
+        CompletableFuture<RespValue> result,
+        RespValue value,
+        Throwable error
+    ) {
+        if (error == null) {
+            result.complete(value);
+        } else {
+            result.completeExceptionally(error);
+        }
+    }
+
+    private static void releaseUndispatched(BobaCallbackDispatcher.Reservation reservation) {
+        if (reservation != null) {
+            reservation.releaseIfUndispatched();
+        }
+    }
+
+    private static void releaseUndispatched(
+        List<BobaCallbackDispatcher.Reservation> reservations
+    ) {
+        for (BobaCallbackDispatcher.Reservation reservation : reservations) {
+            releaseUndispatched(reservation);
+        }
+    }
+
+    private static <T> CompletionStage<T> failedStage(Throwable error) {
+        CompletableFuture<T> result = new CompletableFuture<T>();
+        result.completeExceptionally(error);
+        return result;
     }
 
     public String host() {
@@ -318,6 +416,30 @@ public final class NioConnection implements AutoCloseable {
             throw new IllegalArgumentException("scheduled delay must not be negative");
         }
         eventLoop.schedule(action, delay.toNanos());
+    }
+
+    /**
+     * Registers an internal lifecycle listener that runs after this connection releases its
+     * socket and selector state.
+     */
+    public void onClose(Runnable listener) {
+        if (listener == null) {
+            throw new IllegalArgumentException("close listener must not be null");
+        }
+        boolean notifyNow;
+        synchronized (this) {
+            if (closeListener != null) {
+                throw new IllegalStateException("A close listener is already registered");
+            }
+            closeListener = listener;
+            notifyNow = resourcesClosed && !closeListenerNotified;
+            if (notifyNow) {
+                closeListenerNotified = true;
+            }
+        }
+        if (notifyNow) {
+            notifyCloseListener(listener);
+        }
     }
 
     void register(Selector selector) throws IOException {
@@ -395,14 +517,6 @@ public final class NioConnection implements AutoCloseable {
             }
         });
         return request;
-    }
-
-    private Request enqueueExternal(String[] command) {
-        return enqueueExternal(RespCodec.encodeCommand(command));
-    }
-
-    private Request enqueueExternal(byte[][] command) {
-        return enqueueExternal(RespCodec.encodeCommand(command));
     }
 
     private Request enqueueExternal(byte[] encoded) {
@@ -540,9 +654,13 @@ public final class NioConnection implements AutoCloseable {
         terminalError = error;
         closeRequested = true;
         closed = true;
+        if (pushCallbacks != null) {
+            pushCallbacks.close();
+        }
         if (legacyOwnedEventLoops != null) {
             legacyOwnedEventLoops.close();
         }
+        markResourcesClosed();
     }
 
     private void cancelOnEventLoop(Request request) {
@@ -880,16 +998,33 @@ public final class NioConnection implements AutoCloseable {
                 if (isPubSubAcknowledgement(payload)) {
                     completeNextRequest(payload);
                 } else {
-                    pushListener.accept(payload);
+                    dispatchPush(payload);
                 }
             }
             return;
         }
         if (pushListener != null && isPubSubMessage(payload)) {
-            pushListener.accept(payload);
+            dispatchPush(payload);
             return;
         }
         completeNextRequest(value);
+    }
+
+    private void dispatchPush(final RespValue payload) throws IOException {
+        if (pushCallbacks == null) {
+            pushListener.accept(payload);
+            return;
+        }
+        if (!pushCallbacks.execute(new Runnable() {
+            @Override
+            public void run() {
+                pushListener.accept(payload);
+            }
+        })) {
+            throw new IOException(
+                "Boba Straw Pub/Sub callback capacity is exhausted; closing the subscription connection"
+            );
+        }
     }
 
     private boolean isPubSubMessage(RespValue value) {
@@ -1039,23 +1174,64 @@ public final class NioConnection implements AutoCloseable {
     }
 
     private void closeResources() {
-        SelectionKey currentKey = key;
-        key = null;
-        if (currentKey != null) {
-            currentKey.cancel();
-        }
-        SocketChannel currentChannel = channel;
-        channel = null;
-        if (currentChannel != null) {
-            try {
-                currentChannel.close();
-            } catch (IOException ignored) {
-                // Closing is best-effort.
+        synchronized (this) {
+            if (resourcesClosing || resourcesClosed) {
+                return;
             }
+            resourcesClosing = true;
         }
-        eventLoop.detach(this);
-        if (legacyOwnedEventLoops != null) {
-            legacyOwnedEventLoops.close();
+        try {
+            if (pushCallbacks != null) {
+                pushCallbacks.close();
+            }
+            SelectionKey currentKey = key;
+            key = null;
+            if (currentKey != null) {
+                currentKey.cancel();
+            }
+            SocketChannel currentChannel = channel;
+            channel = null;
+            if (currentChannel != null) {
+                try {
+                    currentChannel.close();
+                } catch (IOException ignored) {
+                    // Closing is best-effort.
+                }
+            }
+            eventLoop.detach(this);
+            if (legacyOwnedEventLoops != null) {
+                legacyOwnedEventLoops.close();
+            }
+        } finally {
+            markResourcesClosed();
+        }
+    }
+
+    private void markResourcesClosed() {
+        synchronized (this) {
+            resourcesClosing = false;
+            resourcesClosed = true;
+        }
+        notifyRegisteredCloseListener();
+    }
+
+    private void notifyRegisteredCloseListener() {
+        Runnable listener;
+        synchronized (this) {
+            if (closeListenerNotified || closeListener == null) {
+                return;
+            }
+            closeListenerNotified = true;
+            listener = closeListener;
+        }
+        notifyCloseListener(listener);
+    }
+
+    private void notifyCloseListener(Runnable listener) {
+        try {
+            listener.run();
+        } catch (Throwable ignored) {
+            // Internal lifecycle observers cannot interfere with socket cleanup.
         }
     }
 

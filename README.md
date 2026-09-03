@@ -51,6 +51,8 @@ BobaStrawClient client = BobaStrawClient.builder()
 try (
     BobaStrawClientResources resources = BobaStrawClientResources.builder()
         .eventLoopThreads(2)
+        .callbackThreads(2)
+        .callbackQueueCapacity(2048)
         .build();
     BobaStrawClient cache = BobaStrawClient.builder()
         .resources(resources)
@@ -64,6 +66,11 @@ try (
     // clients close before resources, in reverse declaration order
 }
 ```
+
+`callbackThreads` 与 `callbackQueueCapacity` 只负责应用可见的 `CompletionStage` continuation 和
+Pub/Sub listener，永不执行 socket I/O。普通命令会在写入前预留一个结果交付位；资源级 callback
+容量耗尽时返回 `BobaStrawBackpressureException`，命令不会发往 Redis。Pub/Sub 同一连接保持消息
+顺序；慢 listener 耗尽容量时会关闭该专用连接，而不会静默丢弃消息。
 
 共享连接默认不发送主动心跳；如需检测长时间空闲连接，可启用：
 

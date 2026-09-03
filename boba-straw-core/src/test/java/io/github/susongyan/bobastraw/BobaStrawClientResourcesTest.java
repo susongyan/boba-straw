@@ -1,5 +1,7 @@
 package io.github.susongyan.bobastraw;
 
+import io.github.susongyan.bobastraw.protocol.RespValue;
+
 import org.junit.jupiter.api.Test;
 
 import java.io.BufferedInputStream;
@@ -57,7 +59,7 @@ class BobaStrawClientResourcesTest {
             assertEquals("PONG", firstReply.get(2, TimeUnit.SECONDS));
             assertEquals("PONG", secondReply.get(2, TimeUnit.SECONDS));
             assertEquals(firstThread.get(), secondThread.get());
-            assertTrue(firstThread.get().startsWith("boba-straw-nio-0"));
+            assertTrue(firstThread.get().startsWith("boba-straw-callback-"));
 
             clientOne.close();
             assertTrue(resources.isOpen());
@@ -72,6 +74,100 @@ class BobaStrawClientResourcesTest {
         assertTrue(second.awaitCompletion());
         first.close();
         second.close();
+    }
+
+    @Test
+    void blockingApplicationCompletionDoesNotBlockTheSharedEventLoop() throws Exception {
+        PingServer first = new PingServer(1, false);
+        PingServer second = new PingServer(1, false);
+        first.start();
+        second.start();
+
+        CountDownLatch callbackStarted = new CountDownLatch(1);
+        CountDownLatch allowCallback = new CountDownLatch(1);
+        BobaStrawClientResources resources = BobaStrawClientResources.builder()
+            .eventLoopThreads(1)
+            .callbackThreads(1)
+            .callbackQueueCapacity(8)
+            .build();
+        BobaStrawClient firstClient = client(resources, first.port());
+        BobaStrawClient secondClient = client(resources, second.port());
+        try {
+            CompletableFuture<String> firstReply = firstClient.async().ping()
+                .thenApply(value -> {
+                    callbackStarted.countDown();
+                    try {
+                        if (!allowCallback.await(2, TimeUnit.SECONDS)) {
+                            throw new AssertionError("Timed out waiting to release the callback");
+                        }
+                    } catch (InterruptedException error) {
+                        Thread.currentThread().interrupt();
+                        throw new AssertionError("Interrupted while waiting to release the callback", error);
+                    }
+                    return value;
+                }).toCompletableFuture();
+
+            assertTrue(first.awaitFirstCommand());
+            assertTrue(callbackStarted.await(2, TimeUnit.SECONDS));
+
+            CompletableFuture<String> secondReply = secondClient.async().ping().toCompletableFuture();
+            assertTrue(
+                second.awaitFirstCommand(),
+                "The second command must reach Redis while the first application callback is blocked"
+            );
+
+            allowCallback.countDown();
+            assertEquals("PONG", firstReply.get(2, TimeUnit.SECONDS));
+            assertEquals("PONG", secondReply.get(2, TimeUnit.SECONDS));
+        } finally {
+            allowCallback.countDown();
+            firstClient.close();
+            secondClient.close();
+            resources.close();
+        }
+
+        assertTrue(first.awaitCompletion());
+        assertTrue(second.awaitCompletion());
+        first.close();
+        second.close();
+    }
+
+    @Test
+    void callbackCapacityRejectsACommandBeforeItIsWritten() throws Exception {
+        PingServer server = new PingServer(2, true);
+        server.start();
+
+        BobaStrawClientResources resources = BobaStrawClientResources.builder()
+            .callbackThreads(1)
+            .callbackQueueCapacity(1)
+            .build();
+        BobaStrawClient client = client(resources, server.port());
+        try {
+            CompletableFuture<RespValue> first =
+                client.executeAsync("PING").toCompletableFuture();
+            assertTrue(server.awaitFirstCommand());
+            CompletableFuture<RespValue> second =
+                client.executeAsync("PING").toCompletableFuture();
+            CompletableFuture<RespValue> rejected =
+                client.executeAsync("PING").toCompletableFuture();
+
+            try {
+                rejected.get(2, TimeUnit.SECONDS);
+                throw new AssertionError("Expected callback capacity to reject the third command");
+            } catch (ExecutionException error) {
+                assertTrue(error.getCause() instanceof BobaStrawBackpressureException);
+            }
+
+            server.allowFirstReply();
+            assertEquals("PONG", first.get(2, TimeUnit.SECONDS).asString());
+            assertEquals("PONG", second.get(2, TimeUnit.SECONDS).asString());
+        } finally {
+            client.close();
+            resources.close();
+        }
+
+        assertTrue(server.awaitCompletion());
+        server.close();
     }
 
     @Test

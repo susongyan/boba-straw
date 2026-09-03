@@ -10,9 +10,18 @@ import java.util.function.Consumer;
 /** Creates connections bound to one loop from a shared EventLoopGroup. */
 public final class NioConnectionFactory {
     private final NioEventLoopGroup eventLoops;
+    private final BobaCallbackDispatcher callbackDispatcher;
 
     public NioConnectionFactory(NioEventLoopGroup eventLoops) {
+        this(eventLoops, null);
+    }
+
+    public NioConnectionFactory(
+        NioEventLoopGroup eventLoops,
+        BobaCallbackDispatcher callbackDispatcher
+    ) {
         this.eventLoops = eventLoops;
+        this.callbackDispatcher = callbackDispatcher;
     }
 
     public NioConnection create(
@@ -50,7 +59,7 @@ public final class NioConnectionFactory {
     ) {
         return new NioConnection(
             eventLoops.next(), host, port, timeout, requestedProtocol, username, password,
-            clientName, pushListener, idlePingInterval, respLimits
+            clientName, pushListener, idlePingInterval, respLimits, callbackDispatcher
         );
     }
 }

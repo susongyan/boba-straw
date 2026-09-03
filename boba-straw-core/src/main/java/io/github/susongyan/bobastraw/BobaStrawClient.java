@@ -206,6 +206,12 @@ public final class BobaStrawClient implements AutoCloseable {
             connection.clientName(), listener, Duration.ZERO, respLimits
         );
         dedicatedConnections.add(dedicated);
+        dedicated.onClose(new Runnable() {
+            @Override
+            public void run() {
+                dedicatedConnections.remove(dedicated);
+            }
+        });
         return dedicated;
     }
 

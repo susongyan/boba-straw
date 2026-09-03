@@ -323,6 +323,7 @@ class BobaStrawProtocolNegotiationTest {
     void resp3PubSubPushAcknowledgementCompletesSubscription() throws Exception {
         Resp3PubSubServer server = new Resp3PubSubServer();
         AtomicReference<String> message = new AtomicReference<String>();
+        AtomicReference<String> listenerThread = new AtomicReference<String>();
         CountDownLatch messageReceived = new CountDownLatch(1);
         server.start();
 
@@ -333,11 +334,13 @@ class BobaStrawProtocolNegotiationTest {
             .build()) {
             BobaStrawSubscription subscription = client.pubSub().subscribe("events", value -> {
                 message.set(value);
+                listenerThread.set(Thread.currentThread().getName());
                 messageReceived.countDown();
             }).toCompletableFuture().get(2, TimeUnit.SECONDS);
 
             assertTrue(messageReceived.await(2, TimeUnit.SECONDS));
             assertEquals("tea", message.get());
+            assertTrue(listenerThread.get().startsWith("boba-straw-callback-"));
             subscription.close();
             assertTrue(server.awaitUnsubscribe());
         }
@@ -366,6 +369,49 @@ class BobaStrawProtocolNegotiationTest {
                 assertTrue(error.getCause() instanceof BobaStrawCommandTimeoutException);
             }
             assertTrue(server.awaitDedicatedClose());
+        }
+
+        assertTrue(server.awaitCompletion());
+        server.close();
+    }
+
+    @Test
+    void slowPubSubListenerClosesItsDedicatedConnectionInsteadOfDroppingMessages() throws Exception {
+        Resp3PubSubOverflowServer server = new Resp3PubSubOverflowServer();
+        server.start();
+
+        CountDownLatch listenerStarted = new CountDownLatch(1);
+        CountDownLatch allowListener = new CountDownLatch(1);
+        BobaStrawClientResources resources = BobaStrawClientResources.builder()
+            .callbackThreads(1)
+            .callbackQueueCapacity(1)
+            .build();
+        try (BobaStrawClient client = BobaStrawClient.builder()
+            .resources(resources)
+            .endpoint("127.0.0.1", server.port())
+            .protocol(ProtocolVersion.AUTO)
+            .commandTimeout(Duration.ofSeconds(2))
+            .build()) {
+            client.pubSub().subscribe("events", value -> {
+                listenerStarted.countDown();
+                try {
+                    if (!allowListener.await(2, TimeUnit.SECONDS)) {
+                        throw new AssertionError("Timed out waiting to release the listener");
+                    }
+                } catch (InterruptedException error) {
+                    Thread.currentThread().interrupt();
+                    throw new AssertionError("Interrupted while waiting to release the listener", error);
+                }
+            }).toCompletableFuture().get(2, TimeUnit.SECONDS);
+
+            assertTrue(server.awaitSubscribe());
+            server.sendBurst();
+            assertTrue(listenerStarted.await(2, TimeUnit.SECONDS));
+            assertTrue(server.awaitDedicatedClose());
+            allowListener.countDown();
+        } finally {
+            allowListener.countDown();
+            resources.close();
         }
 
         assertTrue(server.awaitCompletion());
@@ -537,6 +583,105 @@ class BobaStrawProtocolNegotiationTest {
             Throwable error = failure.get();
             if (error != null) {
                 throw new AssertionError("Fake RESP3 Pub/Sub server failed", error);
+            }
+            return finished;
+        }
+
+        @Override
+        public void close() throws IOException {
+            serverSocket.close();
+        }
+    }
+
+    private static final class Resp3PubSubOverflowServer implements AutoCloseable {
+        private final ServerSocket serverSocket = new ServerSocket(0);
+        private final CountDownLatch complete = new CountDownLatch(2);
+        private final CountDownLatch subscribeReceived = new CountDownLatch(1);
+        private final CountDownLatch allowBurst = new CountDownLatch(1);
+        private final CountDownLatch dedicatedClose = new CountDownLatch(1);
+        private final AtomicReference<Throwable> failure = new AtomicReference<Throwable>();
+
+        private Resp3PubSubOverflowServer() throws IOException {
+        }
+
+        private int port() {
+            return serverSocket.getLocalPort();
+        }
+
+        private void start() {
+            Thread acceptor = new Thread(new Runnable() {
+                @Override
+                public void run() {
+                    try {
+                        for (int index = 0; index < 2; index++) {
+                            startSession(serverSocket.accept());
+                        }
+                    } catch (Throwable error) {
+                        failure.compareAndSet(null, error);
+                        while (complete.getCount() > 0) {
+                            complete.countDown();
+                        }
+                    }
+                }
+            }, "fake-resp3-pubsub-overflow-acceptor");
+            acceptor.setDaemon(true);
+            acceptor.start();
+        }
+
+        private void startSession(final Socket socket) {
+            Thread sessionThread = new Thread(new Runnable() {
+                @Override
+                public void run() {
+                    try (Socket ignored = socket) {
+                        Session session = new Session(socket);
+                        assertEquals(Arrays.asList("HELLO", "3"), session.readCommand());
+                        session.write("+OK\r\n");
+                        List<String> command;
+                        try {
+                            command = session.readCommand();
+                        } catch (IOException closed) {
+                            return;
+                        }
+                        if (!"SUBSCRIBE".equals(command.get(0))) {
+                            throw new IOException("Expected SUBSCRIBE but received " + command);
+                        }
+                        assertEquals(Arrays.asList("SUBSCRIBE", "events"), command);
+                        session.write(">3\r\n+subscribe\r\n+events\r\n:1\r\n");
+                        subscribeReceived.countDown();
+                        await(allowBurst);
+                        session.write(">3\r\n+message\r\n+events\r\n+one\r\n"
+                            + ">3\r\n+message\r\n+events\r\n+two\r\n"
+                            + ">3\r\n+message\r\n+events\r\n+three\r\n");
+                        session.awaitClientClose();
+                        dedicatedClose.countDown();
+                    } catch (Throwable error) {
+                        failure.compareAndSet(null, error);
+                    } finally {
+                        complete.countDown();
+                    }
+                }
+            }, "fake-resp3-pubsub-overflow-session");
+            sessionThread.setDaemon(true);
+            sessionThread.start();
+        }
+
+        private boolean awaitSubscribe() throws InterruptedException {
+            return subscribeReceived.await(2, TimeUnit.SECONDS);
+        }
+
+        private void sendBurst() {
+            allowBurst.countDown();
+        }
+
+        private boolean awaitDedicatedClose() throws InterruptedException {
+            return dedicatedClose.await(2, TimeUnit.SECONDS);
+        }
+
+        private boolean awaitCompletion() throws InterruptedException {
+            boolean finished = complete.await(2, TimeUnit.SECONDS);
+            Throwable error = failure.get();
+            if (error != null) {
+                throw new AssertionError("Fake RESP3 Pub/Sub overflow server failed", error);
             }
             return finished;
         }

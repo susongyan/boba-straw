@@ -34,7 +34,13 @@ factory 分配给固定 EventLoop；连接创建后不迁移。默认 Client 自
 
 阶段 5A 已将命令、握手、空闲 PING 和固定间隔的共享连接重连检查，收敛到所属
 `NioEventLoop` 的可取消 deadline 队列。deadline 从请求创建时开始计时；在请求正常结束、
-取消或连接关闭后会被取消或跳过。回调隔离、容量背压和退避重连仍属于阶段 5 的后续子阶段。
+取消或连接关闭后会被取消或跳过。
+
+阶段 5B 已将应用可见的 `CompletionStage` 完成和 Pub/Sub listener 转交给
+`BobaStrawClientResources` 持有的有界 callback dispatcher。普通命令在写入前先预留一个
+callback slot；若没有容量则本地返回 `BobaStrawBackpressureException`，不会发送 Redis 命令。
+每个 Pub/Sub 连接使用串行分发器保留消息顺序；慢消费者耗尽容量时关闭该专用连接，绝不静默
+丢弃消息。连接 in-flight/待写字节上限、退避重连和状态指标仍属于阶段 5 的后续子阶段。
 
 ## 目标结构
 
@@ -45,6 +51,7 @@ flowchart LR
     Resources["BobaStrawClientResources"] --> Loop1
     Resources --> Loop2["NioEventLoop 2"]
     Resources --> LoopN["NioEventLoop N"]
+    Resources --> Callbacks["bounded callback workers"]
     Loop1 --> Selector1["Selector + deadline queue"]
     Selector1 --> A["NioConnection A"]
     Selector1 --> B["NioConnection B"]
@@ -61,18 +68,22 @@ per-event-loop MPSC task queue -- wakeup --> NioEventLoop
                                              +-- NioConnection A
                                              +-- NioConnection B
                                              +-- NioConnection C
+
+BobaStrawClientResources -- bounded queue --> callback workers
 ```
 
 `BobaStrawClientResources` 提供可共享的 `NioEventLoopGroup`。未传入
 Resources 时，Client 创建并拥有它；传入 Resources 时由调用方在应用关闭时
 统一关闭。关闭一个使用外部 Resources 的 Client 只关闭该 Client 的物理连接；不会
 关闭其他 Client 或 Resources。关闭 Resources 时，group 拒绝新任务、关闭所有已注册
-连接并使未完成请求终止；不会自动重试。
+连接并使未完成请求终止；已接受的 callback 完成任务会继续排空。不会自动重试。
 
 ```java
 try (
     BobaStrawClientResources resources = BobaStrawClientResources.builder()
         .eventLoopThreads(2)
+        .callbackThreads(2)
+        .callbackQueueCapacity(2048)
         .build();
     BobaStrawClient orders = BobaStrawClient.builder()
         .resources(resources)
@@ -89,6 +100,7 @@ sequenceDiagram
     participant App as 业务线程
     participant Queue as EventLoop task queue
     participant Loop as NioEventLoop
+    participant Callback as bounded callback dispatcher
     participant Redis as Redis/Valkey
 
     App->>App: 编码不可变命令帧
@@ -102,12 +114,15 @@ sequenceDiagram
     Loop->>Loop: 增量状态机解码、资源校验与响应分类
     alt 普通响应
         Loop->>Loop: pending 队首匹配
-        Loop-->>App: complete CompletionStage
+        Loop->>Callback: 完成应用 Future
+        Callback-->>App: complete CompletionStage / continuation
     else RESP3 Push 或 Pub/Sub 消息
-        Loop-->>App: dispatcher 保序分发
+        Loop->>Callback: 每连接串行 listener 分发
+        Callback-->>App: 保序执行 listener
     else Attribute + 普通响应
         Loop->>Loop: 保留 Attribute 并匹配 pending 队首
-        Loop-->>App: complete CompletionStage
+        Loop->>Callback: 完成应用 Future
+        Callback-->>App: complete CompletionStage / continuation
     end
 ```
 
@@ -189,9 +204,10 @@ flowchart TD
   因多次输入而绕过 64 个响应的服务上限。
 - RESP3 Push 与 Attribute 在进入普通 `pending` 队列前分流。Attribute 关联
   的普通响应仍严格匹配队首请求。
-- Pub/Sub listener 和 `CompletionStage` 的非 async continuation 当前仍可能运行在
-  EventLoop；阶段 5 将提供有界 dispatcher / 可选 callback executor，届时不得让业务
-  回调阻塞网络线程。
+- `CompletionStage` 的应用 continuation 和 Pub/Sub listener 都由有界 callback dispatcher
+  运行，不会直接阻塞 EventLoop。默认 Resources 使用 1 个 callback worker 和 1024 个排队位；
+  应用可通过 `callbackThreads(...)`、`callbackQueueCapacity(...)` 调整。每个 Pub/Sub 连接
+  的 listener 串行执行以保持消息顺序；不同连接可由多个 worker 并行处理。
 - Pub/Sub 专用连接在具备命令感知的 RESP3 `pong` 匹配前不发送 idle PING；避免
   `pong` Push 被误当作普通命令响应。
 
@@ -239,6 +255,13 @@ Attribute 不会抢占 Push 或普通回复的 FIFO 位置。
 并返回“可能已执行”语义。调用方可通过
 `BobaStrawCommandTimeoutException.mayHaveExecuted()` 读取这一区分。
 同步 API 只等待同一异步请求的结果，不再建立第二套独立的超时定时器。
+
+阶段 5B 的 callback dispatcher 是资源级共享的有界容量。普通命令在发送前必须预留一个
+completion slot；没有 slot 时立即返回 `BobaStrawBackpressureException`，因此该命令明确
+未发送。已预留的命令即使 callback worker 暂时繁忙，也不会退回到 EventLoop 执行业务代码。
+Pub/Sub 消息也需要 slot；不足时客户端关闭该订阅专用连接，使丢失或重连语义显式可见。用户
+listener 异常被隔离，不能杀死 callback worker 或 Selector。该容量当前保护结果交付，后续仍要
+增加按连接的 in-flight 和待写字节上限。
 
 当前重连仍是固定间隔检查，不重放任何命令。指数退避、连接状态与更细粒度指标属于后续子阶段。
 
@@ -319,7 +342,19 @@ Attribute 不会抢占 Push 或普通回复的 FIFO 位置。
 - 共享连接的固定间隔重连检查由其当前连接所属 EventLoop 调度；Client 关闭或连接替换通过
   generation 使旧检查失效。检查仅创建新连接，绝不重发失败或超时命令。
 - `NioEventLoopDeadlineTest` 覆盖 deadline 所属线程、取消和 EventLoop 存活；协议 socket
-  测试覆盖命令 deadline。完整 `mvn test` 回归后才可继续阶段 5B。
+  测试覆盖命令 deadline。
+
+### 阶段 5B 验收（已完成，阶段 5 其余部分仍进行中）
+
+- `BobaStrawClientResources` 管理独立、有界的 callback worker；`CompletionStage` 的应用
+  continuation 不再在 NIO Selector 线程执行。结果 slot 在命令发送前预留，饱和时返回
+  `BobaStrawBackpressureException` 且不写 socket。
+- 每个有 push listener 的连接拥有串行 callback dispatcher，保持同一 Pub/Sub 连接的消息顺序。
+  慢 listener 耗尽容量时主动关闭该专用连接；其生命周期 listener 会从 Client 的专用连接集合
+  移除，避免死连接残留。
+- `BobaCallbackDispatcherTest` 覆盖容量预留和串行顺序；`BobaStrawClientResourcesTest` 覆盖
+  阻塞业务 continuation 不阻塞共享 EventLoop；协议 socket 测试覆盖 Pub/Sub callback 线程和
+  慢消费者关闭语义。完整 `mvn test` 回归后才可继续阶段 5C。
 
 ### 阶段 6 性能验收计划（待阶段 4、5 完成后执行）
 
