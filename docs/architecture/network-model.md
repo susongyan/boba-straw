@@ -3,6 +3,10 @@
 本文档定义 Boba Straw 的 NIO 网络模型、并发所有权和演进顺序。它是
 `NioConnection`、协议解码、取消、超时和重连实现的事实来源。
 
+本文中的图使用 Mermaid **11.16.0** 语法作为校验基线（与 VS Code 的 Mermaid 预览版本保持
+一致）。为避免 renderer 差异，flowchart 统一使用 `graph LR` / `graph TD`，节点与连线标签
+不嵌入 `[]`、`->` 或复杂引号。
+
 ## 目标
 
 - Java 8、JDK-only；不引入 Netty、Reactor、RxJava 或其他运行时。
@@ -32,31 +36,40 @@ factory 分配给固定 EventLoop；连接创建后不迁移。默认 Client 自
 `RespLimits` 在 decoder 内强制执行，并从 Standalone、重连、事务专用池、Pub/Sub 专用
 连接和 Cluster 每个节点连接统一传递。
 
-阶段 5A 已将命令、握手、空闲 PING 和固定间隔的共享连接重连检查，收敛到所属
-`NioEventLoop` 的可取消 deadline 队列。deadline 从请求创建时开始计时；在请求正常结束、
-取消或连接关闭后会被取消或跳过。
+阶段 5A 已将命令、握手和空闲 PING 收敛到所属 `NioEventLoop` 的可取消 deadline
+队列。deadline 从请求创建时开始计时；在请求正常结束、取消或连接关闭后会被取消或跳过。
 
 阶段 5B 已将应用可见的 `CompletionStage` 完成和 Pub/Sub listener 转交给
 `BobaStrawClientResources` 持有的有界 callback dispatcher。普通命令在写入前先预留一个
 callback slot；若没有容量则本地返回 `BobaStrawBackpressureException`，不会发送 Redis 命令。
 每个 Pub/Sub 连接使用串行分发器保留消息顺序；慢消费者耗尽容量时关闭该专用连接，绝不静默
-丢弃消息。连接 in-flight/待写字节上限、退避重连和状态指标仍属于阶段 5 的后续子阶段。
+丢弃消息。同步 API 直接等待内部 transport 完成，不会因为业务 callback worker 被占满而
+无限等待。
+
+阶段 5C 已增加每条物理连接独立的命令准入上限：默认最多 4,096 条应用命令和 16 MiB
+尚未写入 socket 的编码帧。命令数从准入到响应排空一直占位；待写字节则随着实际
+`SocketChannel.write` 的 position 前进逐步归还。准入失败返回
+`BobaStrawBackpressureException` 且不会写 Redis。Standalone 的共享连接在 close lifecycle
+上驱动重连，使用 base interval 至 max interval 的指数退避；它从不迁移或重放失败命令。
+Pub/Sub 的退订 ACK 到达后立即释放该专用连接的 socket 和 Selector；ACK 前已接受的 listener
+仍由 serial barrier 保序排空，随后关闭该 callback stream。慢 listener 因而不会长期占用物理连接；
+若 Client 在排空期间关闭，尚未开始的 listener 会被取消。
 
 ## 目标结构
 
 ```mermaid
-flowchart LR
-    App["业务线程"] -->|"submit / cancel / close"| Tasks["MPSC task queue"]
-    Tasks -->|"Selector.wakeup()"| Loop1["NioEventLoop 1"]
-    Resources["BobaStrawClientResources"] --> Loop1
-    Resources --> Loop2["NioEventLoop 2"]
-    Resources --> LoopN["NioEventLoop N"]
-    Resources --> Callbacks["bounded callback workers"]
-    Loop1 --> Selector1["Selector + deadline queue"]
-    Selector1 --> A["NioConnection A"]
-    Selector1 --> B["NioConnection B"]
-    Loop2 --> C["NioConnection C"]
-    LoopN --> D["NioConnection D"]
+graph LR
+    App[业务线程] -->|submit cancel close| Tasks[MPSC task queue]
+    Tasks -->|Selector wakeup| Loop1[NioEventLoop 1]
+    Resources[BobaStrawClientResources] --> Loop1
+    Resources --> Loop2[NioEventLoop 2]
+    Resources --> LoopN[NioEventLoop N]
+    Resources --> Callbacks[bounded callback workers]
+    Loop1 --> Selector1[Selector and deadline queue]
+    Selector1 --> A[NioConnection A]
+    Selector1 --> B[NioConnection B]
+    Loop2 --> C[NioConnection C]
+    LoopN --> D[NioConnection D]
 ```
 
 ```text
@@ -104,16 +117,18 @@ sequenceDiagram
     participant Redis as Redis/Valkey
 
     App->>App: 编码不可变命令帧
+    App->>App: 预留 connection command / write-byte capacity
     App->>Queue: submit(request)
     App->>Loop: Selector.wakeup()
     Loop->>Queue: drain tasks
     Loop->>Loop: 加入 outbound FIFO
-    Loop->>Redis: gathering write（最多 32 帧 / 64 KiB）
+    Loop->>Redis: gathering write, max 32 frames / 64 KiB
+    Loop->>Loop: 实际写入字节归还 write-byte capacity
     Loop->>Loop: 仅完整帧从 outbound -> pending
     Redis-->>Loop: RESP response / Push / Attribute
     Loop->>Loop: 增量状态机解码、资源校验与响应分类
     alt 普通响应
-        Loop->>Loop: pending 队首匹配
+        Loop->>Loop: pending 队首匹配并归还 command slot
         Loop->>Callback: 完成应用 Future
         Callback-->>App: complete CompletionStage / continuation
     else RESP3 Push 或 Pub/Sub 消息
@@ -129,17 +144,17 @@ sequenceDiagram
 ## 取消与失败流程
 
 ```mermaid
-flowchart TD
-    Start["调用方取消或命令超时"] --> State{"请求状态"}
-    State -->|"QUEUED"| Remove["EventLoop 移出 outbound"]
-    Remove --> NotSent["调用方得到未发送/取消结果"]
-    State -->|"WRITING 或 SENT"| Drain["标记 CANCELLED_DRAINING"]
-    Drain --> CallerDone["调用方 Future 结束"]
-    Drain --> Reply["Redis 响应仍到达"]
-    Reply --> Drop["丢弃该响应，占位出队"]
-    State -->|"连接断开"| Classify["按写入状态分类失败"]
-    Classify --> Maybe["已写或部分写：可能已执行"]
-    Classify --> Never["未写：明确未发送"]
+graph TD
+    Start[调用方取消或命令超时] --> State{请求状态}
+    State -->|QUEUED| Remove[EventLoop 移出 outbound]
+    Remove --> NotSent[调用方得到未发送或取消结果]
+    State -->|WRITING 或 SENT| Drain[标记 CANCELLED DRAINING]
+    Drain --> CallerDone[调用方 Future 结束]
+    Drain --> Reply[Redis 响应仍到达]
+    Reply --> Drop[丢弃响应并释放 FIFO 占位]
+    State -->|连接断开| Classify[按写入状态分类失败]
+    Classify --> Maybe[已写或部分写 可能已执行]
+    Classify --> Never[未写 明确未发送]
 ```
 
 ## 连接所有权
@@ -147,6 +162,10 @@ flowchart TD
 业务线程只能创建不可变命令帧，并提交以下任务：发送、取消、关闭。
 `outbound`、`pending`、`SelectionKey`、协议 decoder、握手状态、空闲 PING
 状态和 deadline 只能由所属 EventLoop 读写。
+
+连接准入计数是唯一例外：它是一个极短的线程安全 reservation，用于让多个 producer 在提交
+EventLoop task 前原子地拒绝超限命令；它不读取或修改协议队列。EventLoop 仍是 request 状态、
+写入进度和 reservation 归还时机的唯一所有者。
 
 请求状态如下：
 
@@ -176,21 +195,21 @@ QUEUED -> CANCELLED
 不是吞吐调优承诺，后续以 JMH 与负载压测结果校准。
 
 ```mermaid
-flowchart TD
-    Begin["EventLoop 单轮开始"] --> Tasks["最多 drain 256 个 submitted tasks"]
-    Tasks --> Ready{"任务积压或缓存响应？"}
-    Ready -->|"是"| Poll["Selector.selectNow()"]
-    Ready -->|"否"| Wait["Selector.select(最多 100 ms)"]
-    Poll --> Events["connect / read / write events"]
+graph TD
+    Begin[EventLoop 单轮开始] --> Tasks[最多 drain 256 个 submitted tasks]
+    Tasks --> Ready{任务积压或缓存响应}
+    Ready -->|是| Poll[Selector selectNow]
+    Ready -->|否| Wait[Selector select 最多 100 ms]
+    Poll --> Events[connect read write events]
     Wait --> Events
-    Events --> Read{"可读?"}
-    Read -->|"是"| Decode["连接私有 16 KiB 读缓冲；最多读 64 KiB"]
-    Decode --> Dispatch["最多分发 64 响应；命中上限立即让出"]
-    Read -->|"否"| Write
-    Dispatch --> Write{"可写或有 outbound?"}
-    Write -->|"是"| Flush["gathering write：最多 32 帧 / 64 KiB"]
-    Write -->|"否"| Tick
-    Flush --> Tick["处理 deferred response、arm write、idle check"]
+    Events --> Read{可读}
+    Read -->|是| Decode[连接私有 16 KiB 读缓冲 最多读 64 KiB]
+    Decode --> Dispatch[最多分发 64 响应 命中上限立即让出]
+    Read -->|否| Write
+    Dispatch --> Write{可写或有 outbound}
+    Write -->|是| Flush[gathering write 最多 32 帧 64 KiB]
+    Write -->|否| Tick
+    Flush --> Tick[处理 deferred response arm write idle check]
     Tick --> Begin
 ```
 
@@ -214,17 +233,17 @@ flowchart TD
 ### RESP 增量状态机与资源上限
 
 ```mermaid
-flowchart LR
-    Socket["Socket read buffer"] --> Input["Decoder compact input buffer"]
-    Input --> Header["marker / strict CRLF line state"]
-    Header --> Bulk["Bulk state: payload -> final byte[]"]
-    Header --> Frames["explicit Frame stack: Array / Map / Set / Push / Attribute"]
-    Bulk --> Complete["complete RespValue"]
+graph LR
+    Socket[Socket read buffer] --> Input[Decoder compact input buffer]
+    Input --> Header[marker and strict CRLF line state]
+    Header --> Bulk[Bulk state payload to final byte array]
+    Header --> Frames[explicit frame stack]
+    Bulk --> Complete[complete RespValue]
     Frames --> Complete
-    Complete --> Classify{"value type"}
-    Classify -->|"normal"| Fifo["pending queue head"]
-    Classify -->|"Push"| Push["Push / PubSub dispatcher"]
-    Classify -->|"Attribute"| Atomic["attach complete payload atomically"]
+    Complete --> Classify{value type}
+    Classify -->|normal| Fifo[pending queue head]
+    Classify -->|Push| Push[Push or PubSub dispatcher]
+    Classify -->|Attribute| Atomic[attach complete payload atomically]
     Atomic --> Classify
 ```
 
@@ -248,22 +267,34 @@ Attribute 不会抢占 Push 或普通回复的 FIFO 位置。
 
 ## Deadline、健康检查与背压
 
-阶段 5A 已使每个 EventLoop 持有 deadline 队列，统一管理命令超时、握手、空闲 PING 和
-固定间隔的共享连接重连检查。deadline 使用单调时钟；请求在创建时开始计时，已完成、取消或
+阶段 5A 已使每个 EventLoop 持有 deadline 队列，统一管理命令超时、握手和空闲 PING。
+deadline 使用单调时钟；请求在创建时开始计时，已完成、取消或
 关闭的请求会取消其 deadline，过期的请求只在所属 EventLoop 上改变队列状态。未发送的超时
 请求返回“未发送”语义；已开始写入的超时请求进入 `CANCELLED_DRAINING`，仍保留协议占位，
 并返回“可能已执行”语义。调用方可通过
 `BobaStrawCommandTimeoutException.mayHaveExecuted()` 读取这一区分。
-同步 API 只等待同一异步请求的结果，不再建立第二套独立的超时定时器。
+同步 API 只等待内部 transport 请求的结果，不建立第二套独立超时定时器，也不依赖 callback
+dispatcher 的排队进度。
 
 阶段 5B 的 callback dispatcher 是资源级共享的有界容量。普通命令在发送前必须预留一个
 completion slot；没有 slot 时立即返回 `BobaStrawBackpressureException`，因此该命令明确
 未发送。已预留的命令即使 callback worker 暂时繁忙，也不会退回到 EventLoop 执行业务代码。
 Pub/Sub 消息也需要 slot；不足时客户端关闭该订阅专用连接，使丢失或重连语义显式可见。用户
-listener 异常被隔离，不能杀死 callback worker 或 Selector。该容量当前保护结果交付，后续仍要
-增加按连接的 in-flight 和待写字节上限。
+listener 异常被隔离，不能杀死 callback worker 或 Selector。该容量只保护结果交付，不承担
+每条 socket 的命令或内存限制。
 
-当前重连仍是固定间隔检查，不重放任何命令。指数退避、连接状态与更细粒度指标属于后续子阶段。
+阶段 5C 的 connection-level capacity 与 callback capacity 相互独立：前者保护每条 socket 的
+命令/内存边界，后者保护应用结果交付。连接执行 `WRITING`/`SENT` 请求的取消或超时后，命令
+slot 只能在对应 Redis 响应排空时归还；排队取消、排队超时或连接失败可立即归还。完整帧写出
+后会释放其编码 `ByteBuffer`，并归还所有待写字节。
+
+共享连接 lifecycle 为 `CONNECTING -> READY -> BACKING_OFF -> CONNECTING`，Client close 或
+Resources close 进入 `CLOSED`。初次和连续握手失败按
+`min(reconnectMaxInterval, previousDelay * 2)` 等待；只有完整握手成功才重置为 base interval。
+BACKING_OFF 中的新调用不会绕过退避建立 socket，而是以
+`BobaStrawCommandNotSentException` 明确失败。`BobaStrawClient.metrics()` 提供无网络 I/O 的
+状态快照：connection creations、reconnect attempts/successes、连续失败数、下一次延迟、当前
+in-flight/待写字节与本连接背压拒绝计数。
 
 连接必须提供有界保护：最大 in-flight 命令数、最大待写字节、最大 RESP 响应、
 最大 Pub/Sub 分发积压。超限时本地明确拒绝，不能静默丢弃或无限缓存。
@@ -274,7 +305,8 @@ listener 异常被隔离，不能杀死 callback worker 或 Selector。该容量
 2. **共享 EventLoopGroup**：多个连接共享有限 Selector 线程，并完成生命周期测试。
 3. **I/O 吞吐**：复用读缓冲、写入聚合、读写公平预算。
 4. **RESP 增量状态机（已完成）**：减少累积复制和碎片重解析，并加入协议资源上限。
-5. **背压与回调隔离**：有界队列、统一 deadline、Pub/Sub dispatcher、可选 callback executor。
+5. **背压、回调隔离与连接生命周期（已完成）**：有界队列、统一 deadline、Pub/Sub
+   dispatcher、连接准入、退避重连和状态快照。
 6. **基准与故障注入**：并发取消、部分写、断连、慢消费者、Redis/Valkey 矩阵和 JMH。
 
 每阶段都必须保留 Java 8 兼容、执行 `mvn test`，并添加针对碎片输入、响应匹配、
@@ -333,18 +365,18 @@ listener 异常被隔离，不能杀死 callback worker 或 Selector。该容量
   数组复用、非法 wire 和所有资源限制边界；socket 测试验证协议超限关闭连接并保留已写命令
   的“可能已执行”语义。完整 `mvn test` 回归后才可进入阶段 5。
 
-### 阶段 5A 验收（已完成，阶段 5 其余部分仍进行中）
+### 阶段 5A 验收（已完成）
 
 - 每个 `NioEventLoop` 使用自己的可取消 deadline 队列，并在 selector 等待前以最近 deadline
   计算等待时间；到期任务和普通 NIO I/O 都只在该 EventLoop 上执行。
 - 普通命令、握手命令和空闲 PING 共享同一请求 deadline 模型。取消或超时的已写请求保留
   `CANCELLED_DRAINING` 响应占位，不能让后续响应错配。
-- 共享连接的固定间隔重连检查由其当前连接所属 EventLoop 调度；Client 关闭或连接替换通过
-  generation 使旧检查失效。检查仅创建新连接，绝不重发失败或超时命令。
+- deadline 的取消、关闭和 generation 防护为后续连接 lifecycle 调度提供统一基础；不会
+  重发失败或超时命令。
 - `NioEventLoopDeadlineTest` 覆盖 deadline 所属线程、取消和 EventLoop 存活；协议 socket
   测试覆盖命令 deadline。
 
-### 阶段 5B 验收（已完成，阶段 5 其余部分仍进行中）
+### 阶段 5B 验收（已完成）
 
 - `BobaStrawClientResources` 管理独立、有界的 callback worker；`CompletionStage` 的应用
   continuation 不再在 NIO Selector 线程执行。结果 slot 在命令发送前预留，饱和时返回
@@ -355,6 +387,23 @@ listener 异常被隔离，不能杀死 callback worker 或 Selector。该容量
 - `BobaCallbackDispatcherTest` 覆盖容量预留和串行顺序；`BobaStrawClientResourcesTest` 覆盖
   阻塞业务 continuation 不阻塞共享 EventLoop；协议 socket 测试覆盖 Pub/Sub callback 线程和
   慢消费者关闭语义。完整 `mvn test` 回归后才可继续阶段 5C。
+
+### 阶段 5C 验收（已完成）
+
+- `BobaStrawConnectionLimits` 为每条物理连接设置 `maxInFlightCommands` 和
+  `maxQueuedWriteBytes`；Standalone 重连、事务池、Pub/Sub 专用连接和 Cluster 节点连接均传递
+  同一 Client-owned 配置。Pipeline 在写入前一次性预留全部命令，任一上限不足时零帧写出。
+- 已写取消/超时请求在 `CANCELLED_DRAINING` 中继续占用 command slot，直到对应回复消费；排队
+  取消和超时、断连和正常回复均正确归还 reservation。待写字节仅在实际 socket write 后归还。
+- 共享连接使用 close/ready lifecycle 而非固定轮询；失败候选按 capped exponential backoff 重建。
+  Client 不重放、迁移或隐藏已失败命令，并通过 `BobaStrawClientMetrics` 暴露连接状态与累计指标。
+- 派生的 String、binary 和 Pub/Sub `CompletionStage` 取消会传播回底层请求；同步 facade 直接等待
+  transport completion。UNSUBSCRIBE ACK 后立即释放专用连接的 socket/Selector；Pub/Sub 串行 callback
+  barrier 继续先交付 ACK 前已经解码的消息，再关闭 callback stream，不让慢 listener 持有物理连接。
+  Client 在排空期间关闭时会终止该 callback stream，不能在关闭后继续启动排队 listener。
+- `BobaStrawConnectionLifecycleTest` 覆盖容量拒绝、Pipeline 原子准入、取消后的响应占位和 capped
+  reconnect；`BobaStrawClientResourcesTest` 覆盖同步 API 不受阻塞 callback 影响及派生 Future 取消；
+  `BobaStrawProtocolNegotiationTest` 覆盖退订 barrier。完整 `mvn test` 已回归。
 
 ### 阶段 6 性能验收计划（待阶段 4、5 完成后执行）
 

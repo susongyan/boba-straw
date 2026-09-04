@@ -110,15 +110,14 @@ class BobaStrawClientResourcesTest {
             assertTrue(first.awaitFirstCommand());
             assertTrue(callbackStarted.await(2, TimeUnit.SECONDS));
 
-            CompletableFuture<String> secondReply = secondClient.async().ping().toCompletableFuture();
-            assertTrue(
-                second.awaitFirstCommand(),
-                "The second command must reach Redis while the first application callback is blocked"
+            assertEquals(
+                "PONG",
+                secondClient.sync().ping(),
+                "The synchronous facade must not wait for an unrelated blocked callback worker"
             );
 
             allowCallback.countDown();
             assertEquals("PONG", firstReply.get(2, TimeUnit.SECONDS));
-            assertEquals("PONG", secondReply.get(2, TimeUnit.SECONDS));
         } finally {
             allowCallback.countDown();
             firstClient.close();
@@ -161,6 +160,36 @@ class BobaStrawClientResourcesTest {
             server.allowFirstReply();
             assertEquals("PONG", first.get(2, TimeUnit.SECONDS).asString());
             assertEquals("PONG", second.get(2, TimeUnit.SECONDS).asString());
+        } finally {
+            client.close();
+            resources.close();
+        }
+
+        assertTrue(server.awaitCompletion());
+        server.close();
+    }
+
+    @Test
+    void typedAsyncCancellationReleasesTheUnderlyingCallbackReservation() throws Exception {
+        PingServer server = new PingServer(3, true);
+        server.start();
+
+        BobaStrawClientResources resources = BobaStrawClientResources.builder()
+            .callbackThreads(1)
+            .callbackQueueCapacity(1)
+            .build();
+        BobaStrawClient client = client(resources, server.port());
+        try {
+            CompletableFuture<String> first = client.async().ping().toCompletableFuture();
+            assertTrue(server.awaitFirstCommand());
+            CompletableFuture<String> second = client.async().ping().toCompletableFuture();
+
+            assertTrue(first.cancel(false));
+            CompletableFuture<RespValue> third = client.executeAsync("PING").toCompletableFuture();
+
+            server.allowFirstReply();
+            assertEquals("PONG", second.get(2, TimeUnit.SECONDS));
+            assertEquals("PONG", third.get(2, TimeUnit.SECONDS).asString());
         } finally {
             client.close();
             resources.close();

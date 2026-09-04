@@ -27,6 +27,7 @@ public final class BobaStrawClusterClient implements AutoCloseable {
     private final boolean ownsResources;
     private final NioConnectionFactory connectionFactory;
     private final RespLimits respLimits;
+    private final BobaStrawConnectionLimits connectionLimits;
     private final Map<Integer, Node> slots = new HashMap<Integer, Node>();
     private final Map<String, Node> nodes = new HashMap<String, Node>();
     private final Object lock = new Object();
@@ -39,6 +40,7 @@ public final class BobaStrawClusterClient implements AutoCloseable {
         }
         this.connectionFactory = resources.connectionFactory();
         this.respLimits = builder.respLimits;
+        this.connectionLimits = builder.connectionLimits;
         this.timeout = builder.timeout;
         this.protocol = builder.protocol;
         this.username = builder.username;
@@ -153,7 +155,7 @@ public final class BobaStrawClusterClient implements AutoCloseable {
             }
             Node created = new Node(connectionFactory.create(
                 host, port, timeout, protocol, username, password, clientName, null,
-                Duration.ZERO, respLimits
+                Duration.ZERO, respLimits, connectionLimits
             ));
             nodes.put(id, created);
             return created;
@@ -234,6 +236,7 @@ public final class BobaStrawClusterClient implements AutoCloseable {
         private String clientName;
         private BobaStrawClientResources resources;
         private RespLimits respLimits = RespLimits.defaults();
+        private BobaStrawConnectionLimits connectionLimits = BobaStrawConnectionLimits.defaults();
 
         private Builder() {
             seeds.add(new Seed("localhost", 6379));
@@ -285,6 +288,15 @@ public final class BobaStrawClusterClient implements AutoCloseable {
                 throw new IllegalArgumentException("respLimits must not be null");
             }
             this.respLimits = value;
+            return this;
+        }
+
+        /** Sets command admission limits for every physical Cluster node connection. */
+        public Builder connectionLimits(BobaStrawConnectionLimits value) {
+            if (value == null) {
+                throw new IllegalArgumentException("connectionLimits must not be null");
+            }
+            this.connectionLimits = value;
             return this;
         }
 

@@ -203,13 +203,35 @@ public final class BobaCallbackDispatcher implements AutoCloseable {
             return true;
         }
 
+        /**
+         * Queues an internal barrier after callbacks already accepted for this serial stream.
+         *
+         * <p>The barrier reuses the worker executing the preceding entry, so it does not need a
+         * new global callback reservation while the dispatcher is saturated. Returns false when
+         * no callback precedes it or when this serial stream is already closed.</p>
+         */
+        public boolean executeBarrier(Runnable action) {
+            if (action == null) {
+                throw new IllegalArgumentException("callback action must not be null");
+            }
+            synchronized (lock) {
+                if (closed || (!dispatching && pending.isEmpty())) {
+                    return false;
+                }
+                pending.add(Entry.barrier(action));
+                return true;
+            }
+        }
+
         @Override
         public void close() {
             synchronized (lock) {
                 closed = true;
                 for (Entry entry : pending) {
                     entry.cancelled = true;
-                    entry.reservation.releaseIfUndispatched();
+                    if (entry.reservation != null) {
+                        entry.reservation.releaseIfUndispatched();
+                    }
                 }
                 pending.clear();
                 dispatching = false;
@@ -228,6 +250,19 @@ public final class BobaCallbackDispatcher implements AutoCloseable {
                     dispatching = false;
                     return;
                 }
+            }
+
+            if (entry.barrier) {
+                try {
+                    if (!entry.cancelled) {
+                        entry.action.run();
+                    }
+                } catch (Throwable ignored) {
+                    // Internal lifecycle barriers must not terminate a callback worker.
+                } finally {
+                    onCompleted(entry);
+                }
+                return;
             }
 
             if (!entry.reservation.dispatch(new Runnable() {
@@ -265,7 +300,9 @@ public final class BobaCallbackDispatcher implements AutoCloseable {
                 pending.remove(rejected);
                 for (Entry entry : pending) {
                     entry.cancelled = true;
-                    entry.reservation.releaseIfUndispatched();
+                    if (entry.reservation != null) {
+                        entry.reservation.releaseIfUndispatched();
+                    }
                 }
                 pending.clear();
                 closed = true;
@@ -276,11 +313,23 @@ public final class BobaCallbackDispatcher implements AutoCloseable {
         private static final class Entry {
             private final Reservation reservation;
             private final Runnable action;
+            private final boolean barrier;
             private volatile boolean cancelled;
 
             private Entry(Reservation reservation, Runnable action) {
                 this.reservation = reservation;
                 this.action = action;
+                this.barrier = false;
+            }
+
+            private Entry(Runnable action) {
+                this.reservation = null;
+                this.action = action;
+                this.barrier = true;
+            }
+
+            private static Entry barrier(Runnable action) {
+                return new Entry(action);
             }
         }
     }

@@ -1,6 +1,7 @@
 package io.github.susongyan.bobastraw.internal;
 
 import io.github.susongyan.bobastraw.protocol.RespLimits;
+import io.github.susongyan.bobastraw.BobaStrawConnectionLimits;
 
 import java.time.Duration;
 import java.util.ArrayDeque;
@@ -25,6 +26,7 @@ public final class TransactionConnectionPool implements AutoCloseable {
     private final Duration idleTimeout;
     private final NioConnectionFactory connectionFactory;
     private final RespLimits respLimits;
+    private final BobaStrawConnectionLimits connectionLimits;
     private final NioEventLoopGroup legacyOwnedEventLoops;
     private final Deque<IdleConnection> idle = new ArrayDeque<IdleConnection>();
     private final Set<NioConnection> active = new HashSet<NioConnection>();
@@ -68,7 +70,7 @@ public final class TransactionConnectionPool implements AutoCloseable {
     ) {
         this(host, port, timeout, protocol, username, password, clientName, maxSize,
             acquireTimeout, idleTimeout, new NioConnectionFactory(legacyOwnedEventLoops),
-            legacyOwnedEventLoops, RespLimits.defaults());
+            legacyOwnedEventLoops, RespLimits.defaults(), BobaStrawConnectionLimits.defaults());
     }
 
     public TransactionConnectionPool(
@@ -85,7 +87,8 @@ public final class TransactionConnectionPool implements AutoCloseable {
         NioConnectionFactory connectionFactory
     ) {
         this(host, port, timeout, protocol, username, password, clientName, maxSize,
-            acquireTimeout, idleTimeout, connectionFactory, null, RespLimits.defaults());
+            acquireTimeout, idleTimeout, connectionFactory, null, RespLimits.defaults(),
+            BobaStrawConnectionLimits.defaults());
     }
 
     /**
@@ -106,7 +109,30 @@ public final class TransactionConnectionPool implements AutoCloseable {
         RespLimits respLimits
     ) {
         this(host, port, timeout, protocol, username, password, clientName, maxSize,
-            acquireTimeout, idleTimeout, connectionFactory, null, respLimits);
+            acquireTimeout, idleTimeout, connectionFactory, null, respLimits,
+            BobaStrawConnectionLimits.defaults());
+    }
+
+    /**
+     * Creates a lazy transaction pool with client-owned reply and command-admission limits.
+     */
+    public TransactionConnectionPool(
+        String host,
+        int port,
+        Duration timeout,
+        io.github.susongyan.bobastraw.ProtocolVersion protocol,
+        String username,
+        String password,
+        String clientName,
+        int maxSize,
+        Duration acquireTimeout,
+        Duration idleTimeout,
+        NioConnectionFactory connectionFactory,
+        RespLimits respLimits,
+        BobaStrawConnectionLimits connectionLimits
+    ) {
+        this(host, port, timeout, protocol, username, password, clientName, maxSize,
+            acquireTimeout, idleTimeout, connectionFactory, null, respLimits, connectionLimits);
     }
 
     private TransactionConnectionPool(
@@ -122,13 +148,17 @@ public final class TransactionConnectionPool implements AutoCloseable {
         Duration idleTimeout,
         NioConnectionFactory connectionFactory,
         NioEventLoopGroup legacyOwnedEventLoops,
-        RespLimits respLimits
+        RespLimits respLimits,
+        BobaStrawConnectionLimits connectionLimits
     ) {
         if (maxSize < 1) {
             throw new IllegalArgumentException("maxSize must be positive");
         }
         if (respLimits == null) {
             throw new IllegalArgumentException("respLimits must not be null");
+        }
+        if (connectionLimits == null) {
+            throw new IllegalArgumentException("connectionLimits must not be null");
         }
         this.host = host;
         this.port = port;
@@ -142,6 +172,7 @@ public final class TransactionConnectionPool implements AutoCloseable {
         this.idleTimeout = idleTimeout;
         this.connectionFactory = connectionFactory;
         this.respLimits = respLimits;
+        this.connectionLimits = connectionLimits;
         this.legacyOwnedEventLoops = legacyOwnedEventLoops;
         this.reaper = Executors.newSingleThreadScheduledExecutor(runnable -> {
             Thread thread = new Thread(runnable, "boba-straw-transaction-reaper");
@@ -173,7 +204,7 @@ public final class TransactionConnectionPool implements AutoCloseable {
                 created++;
                 NioConnection connection = connectionFactory.create(
                     host, port, timeout, protocol, username, password, clientName,
-                    null, Duration.ZERO, respLimits
+                    null, Duration.ZERO, respLimits, connectionLimits
                 );
                 active.add(connection);
                 return connection;

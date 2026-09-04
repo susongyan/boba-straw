@@ -27,9 +27,9 @@
 - [x] `BobaStrawClientResources` 共享固定数量的 Selector EventLoop
 - [x] 有界 callback dispatcher 与 Pub/Sub listener 串行隔离
 - [~] 状态型专用连接池（事务连接池已懒加载，Pub/Sub/阻塞命令待补）
-- [~] 共享连接失效检测、下一请求懒重连和固定间隔后台重连
+- [x] 每条物理连接的 in-flight / 待写字节准入上限
+- [x] Standalone 共享连接的 lifecycle 驱动指数退避重连与状态快照
 - [x] 可选空闲连接 PING 健康检测
-- [ ] 后台退避重连、连接状态和指标管理
 
 ### 网络模型演进
 
@@ -38,7 +38,7 @@
 - [x] 阶段 2：共享 Selector EventLoopGroup
 - [x] 阶段 3：读缓冲复用、gathering write 与公平预算
 - [x] 阶段 4：RESP 增量状态机与协议资源上限
-- [~] 阶段 5：统一 deadline、背压、回调与订阅分发隔离
+- [x] 阶段 5：统一 deadline、背压、回调、订阅分发隔离与连接 lifecycle
 - [ ] 阶段 6：JMH、故障注入和负载验收
 
 验收原则：普通命令无需业务配置连接池大小；连接池只服务于状态型场景。
@@ -69,10 +69,10 @@ child；可在 Standalone 或 Cluster Builder 配置，并会传递到重连、�
 Cluster node 连接。越限/畸形回复会关闭连接，已写请求仍明确报告“可能已执行”，绝不重试。
 逐字节 Attribute、大 Bulk、非法 wire、限制边界与 socket 级断连分类均有回归测试。
 
-阶段 5A 验收记录：每个 Selector EventLoop 现在拥有可取消 deadline 队列，命令、握手、
-空闲 PING 和共享连接固定间隔重连检查都不再依赖全局定时线程。请求 deadline 从创建时
-开始计时；未写入时超时明确报告未发送，已写入时进入响应排空并明确报告可能已执行。取消的
-deadline 不会执行，Client 关闭或连接替换会使旧重连检查失效；不会自动重放命令。
+阶段 5A 验收记录：每个 Selector EventLoop 现在拥有可取消 deadline 队列，命令、握手和
+空闲 PING 都不依赖全局定时线程。请求 deadline 从创建时开始计时；未写入时超时明确报告
+未发送，已写入时进入响应排空并明确报告可能已执行。取消的 deadline 不会执行；不会自动
+重放命令。
 `NioEventLoopDeadlineTest` 与协议 socket 回归已覆盖。
 
 阶段 5B 验收记录：`BobaStrawClientResources` 现在还拥有有界 callback dispatcher，默认
@@ -80,8 +80,18 @@ deadline 不会执行，Client 关闭或连接替换会使旧重连检查失效�
 立即以 `BobaStrawBackpressureException` 拒绝且不发送命令。应用的 `CompletionStage`
 continuation 不再执行在 Selector EventLoop；同一 Pub/Sub 连接的 listener 通过串行 dispatcher
 保序执行。慢 listener 耗尽容量时关闭专用连接而非静默丢消息，关闭后会从 Client 专用连接集合
-移除。容量、隔离和慢消费者 socket 回归均已覆盖。阶段 5 尚未完成：仍需按连接的 in-flight /
-待写字节上限、指数退避重连和状态/指标管理。
+移除。容量、隔离和慢消费者 socket 回归均已覆盖。
+
+阶段 5C 验收记录：`BobaStrawConnectionLimits` 默认限制每条物理连接 4,096 条已准入
+命令和 16 MiB 尚未写出的命令帧；Pipeline 在入队前原子预留全部容量，超限时零帧写出。
+已写取消或超时请求保持命令占位直至其响应排空，避免错误地把响应匹配给下一命令。共享
+Standalone 连接由 close/ready lifecycle 驱动 capped exponential backoff；退避期间新调用
+明确失败为“未发送”，不会绕过退避创建额外 socket。`BobaStrawClientMetrics` 提供无 I/O 的
+状态、创建次数、重连尝试/成功、失败计数、下一次退避、in-flight、待写字节及拒绝次数快照。
+同步 facade 直接等待 transport 结果；派生 async stage 的取消会传播到底层请求；退订 ACK 后立即
+释放专用 socket/Selector，Pub/Sub serial barrier 仍保证先交付 ACK 前已经解码的消息，再关闭 callback
+stream；Client 在排空期间关闭会取消尚未开始的 listener。容量、取消、退避、同步隔离和
+退订顺序均由 socket 回归覆盖。
 
 阶段 6 性能验收计划：在阶段 4、5 完成后直接探测并安装缺少的本机 JDK、JMH、Colima
 容器镜像和观测工具；保留阶段 2 提交 `ca078f4` 与网络模型最终提交的可复跑基线。测试
@@ -172,7 +182,7 @@ Redis 与 Valkey 的单命令、Pipeline、大 value、碎片响应、多 Client
 - [ ] 通用 ConnectionFactory
 - [x] Pipeline 与命令超时到物理请求的取消传播和响应排空
 - [x] 未发送/可能已执行请求的失败分类
-- [ ] 有界退避重连、连接状态与指标管理
+- [x] Standalone 有界退避重连、连接状态与指标管理
 - [~] byte[] 基础 RESP 编码和 Raw API
 - [ ] String/ByteArray Codec 及自定义 Codec SPI
 - [ ] Stream、Bitmap、HyperLogLog、EVALSHA、Server/ACL 命令

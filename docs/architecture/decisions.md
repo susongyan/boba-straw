@@ -16,6 +16,16 @@ The client does not automatically retry commands. A timeout or disconnect after 
 
 普通命令默认使用每个 Redis 节点一个共享的 NIO 多路复用连接，不要求业务配置连接池大小。事务、Pub/Sub 和阻塞命令使用独占连接；未来只为这些状态型场景提供可选专用连接池。Cluster 模式按节点分别维护共享连接。
 
+共享连接使用 `BobaStrawConnectionLimits` 做每物理连接的准入保护：默认上限为 4,096 个
+未排空响应的应用命令和 16 MiB 尚未写入 socket 的编码命令帧。这与 Resources 级 callback
+容量相互独立；前者限制单条连接的请求/内存，后者限制应用结果交付。业务线程只在提交
+EventLoop task 前取得很短的 reservation，协议队列和写入进度仍只由 EventLoop 修改。
+
+Standalone 共享连接的 `CONNECTING -> READY -> BACKING_OFF -> CONNECTING` lifecycle 由连接
+close/ready 事件驱动。失败候选按 `reconnectInterval` 至 `reconnectMaxInterval` 的 capped
+exponential backoff 重建；BACKING_OFF 中的新调用明确以“未发送”失败。重连永不迁移、重放或
+掩盖已失败命令，`BobaStrawClientMetrics` 只提供无网络 I/O 的观测快照。
+
 网络线程、连接状态所有权、取消语义和性能演进见
 [`network-model.md`](network-model.md)。该文档规定连接内状态最终由所属 EventLoop
 独占；命令取消后仍必须保留已发送请求的响应占位。
@@ -28,4 +38,6 @@ The client does not automatically retry commands. A timeout or disconnect after 
 
 ## Current delivery boundary
 
-The initial implementation is standalone only. Public topology promises must not be documented as supported until Sentinel and Cluster routing are implemented and tested.
+Standalone 是当前唯一达到基础验收的连接拓扑。Cluster 已有实验性的 seed 发现、slot 路由和
+单次 MOVED/ASK 跳转，但尚未具备周期拓扑刷新、故障摘除、跨 Slot 规则和完整 reconnect
+管理，因此不得作生产支持承诺。Sentinel 和 TLS 仍未实现。

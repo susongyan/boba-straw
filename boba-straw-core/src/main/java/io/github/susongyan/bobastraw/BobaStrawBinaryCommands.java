@@ -13,21 +13,27 @@ public final class BobaStrawBinaryCommands {
     }
 
     public CompletionStage<byte[]> get(byte[] key) {
-        return client.executeBinaryAsync("GET".getBytes(java.nio.charset.StandardCharsets.US_ASCII), key)
-            .thenApply(BobaStrawBinaryCommands::bytes);
+        return BobaStrawStages.map(
+            client.executeBinaryAsync("GET".getBytes(java.nio.charset.StandardCharsets.US_ASCII), key),
+            BobaStrawBinaryCommands::bytes
+        );
     }
 
     public CompletionStage<byte[]> set(byte[] key, byte[] value) {
-        return client.executeBinaryAsync("SET".getBytes(java.nio.charset.StandardCharsets.US_ASCII), key, value)
-            .thenApply(BobaStrawBinaryCommands::bytes);
+        return BobaStrawStages.map(
+            client.executeBinaryAsync("SET".getBytes(java.nio.charset.StandardCharsets.US_ASCII), key, value),
+            BobaStrawBinaryCommands::bytes
+        );
     }
 
     public CompletionStage<Long> del(byte[]... keys) {
         byte[][] arguments = new byte[keys.length + 1][];
         arguments[0] = "DEL".getBytes(java.nio.charset.StandardCharsets.US_ASCII);
         System.arraycopy(keys, 0, arguments, 1, keys.length);
-        return client.executeBinaryAsync(arguments[0], tail(arguments))
-            .thenApply(RespValue::asLong);
+        return BobaStrawStages.map(
+            client.executeBinaryAsync(arguments[0], tail(arguments)),
+            RespValue::asLong
+        );
     }
 
     private static byte[][] tail(byte[][] values) {

@@ -99,7 +99,7 @@ public final class BobaStrawAsyncCommands {
     }
 
     public CompletionStage<List<String>> keys(String pattern) {
-        return client.executeAsync("KEYS", pattern).thenApply(BobaStrawAsyncCommands::stringList);
+        return BobaStrawStages.map(client.executeAsync("KEYS", pattern), BobaStrawAsyncCommands::stringList);
     }
 
     public CompletionStage<String> randomKey() {
@@ -139,7 +139,7 @@ public final class BobaStrawAsyncCommands {
     }
 
     public CompletionStage<List<String>> mget(String... keys) {
-        return client.executeAsync("MGET", keys).thenApply(BobaStrawAsyncCommands::stringList);
+        return BobaStrawStages.map(client.executeAsync("MGET", keys), BobaStrawAsyncCommands::stringList);
     }
 
     public CompletionStage<String> mset(Map<String, String> values) {
@@ -190,7 +190,7 @@ public final class BobaStrawAsyncCommands {
     }
 
     public CompletionStage<Map<String, String>> hgetall(String key) {
-        return client.executeAsync("HGETALL", key).thenApply(BobaStrawAsyncCommands::stringMap);
+        return BobaStrawStages.map(client.executeAsync("HGETALL", key), BobaStrawAsyncCommands::stringMap);
     }
 
     public CompletionStage<Long> lpush(String key, String... values) {
@@ -202,8 +202,10 @@ public final class BobaStrawAsyncCommands {
     }
 
     public CompletionStage<List<String>> lrange(String key, long start, long stop) {
-        return client.executeAsync("LRANGE", key, Long.toString(start), Long.toString(stop))
-            .thenApply(BobaStrawAsyncCommands::stringList);
+        return BobaStrawStages.map(
+            client.executeAsync("LRANGE", key, Long.toString(start), Long.toString(stop)),
+            BobaStrawAsyncCommands::stringList
+        );
     }
 
     public CompletionStage<Long> sadd(String key, String... members) {
@@ -211,7 +213,10 @@ public final class BobaStrawAsyncCommands {
     }
 
     public CompletionStage<Set<String>> smembers(String key) {
-        return client.executeAsync("SMEMBERS", key).thenApply(BobaStrawAsyncCommands::stringSet);
+        return BobaStrawStages.map(
+            client.executeAsync("SMEMBERS", key),
+            BobaStrawAsyncCommands::stringSet
+        );
     }
 
     public CompletionStage<Long> zadd(String key, double score, String member) {
@@ -219,8 +224,10 @@ public final class BobaStrawAsyncCommands {
     }
 
     public CompletionStage<List<String>> zrange(String key, long start, long stop) {
-        return client.executeAsync("ZRANGE", key, Long.toString(start), Long.toString(stop))
-            .thenApply(BobaStrawAsyncCommands::stringList);
+        return BobaStrawStages.map(
+            client.executeAsync("ZRANGE", key, Long.toString(start), Long.toString(stop)),
+            BobaStrawAsyncCommands::stringList
+        );
     }
 
     public CompletionStage<RespValue> eval(String script, String[] keys, String... arguments) {
@@ -233,20 +240,20 @@ public final class BobaStrawAsyncCommands {
         return client.executeAsync(command[0], Arrays.copyOfRange(command, 1, command.length));
     }
 
-    private CompletionStage<String> string(CompletionStage<RespValue> stage) {
-        return stage.thenApply(RespValue::asString);
+    static CompletionStage<String> string(CompletionStage<RespValue> stage) {
+        return BobaStrawStages.map(stage, RespValue::asString);
     }
 
-    private CompletionStage<Long> number(CompletionStage<RespValue> stage) {
-        return stage.thenApply(RespValue::asLong);
+    static CompletionStage<Long> number(CompletionStage<RespValue> stage) {
+        return BobaStrawStages.map(stage, RespValue::asLong);
     }
 
-    private CompletionStage<Boolean> booleanNumber(CompletionStage<RespValue> stage) {
-        return number(stage).thenApply(value -> value.longValue() != 0L);
+    static CompletionStage<Boolean> booleanNumber(CompletionStage<RespValue> stage) {
+        return BobaStrawStages.map(number(stage), value -> value.longValue() != 0L);
     }
 
-    private CompletionStage<Double> doubleNumber(CompletionStage<RespValue> stage) {
-        return stage.thenApply(BobaStrawAsyncCommands::asDouble);
+    static CompletionStage<Double> doubleNumber(CompletionStage<RespValue> stage) {
+        return BobaStrawStages.map(stage, BobaStrawAsyncCommands::asDouble);
     }
 
     private static String[] prepend(String first, String[] values) {
@@ -284,7 +291,7 @@ public final class BobaStrawAsyncCommands {
         return Double.parseDouble(value.asString());
     }
 
-    private static List<String> stringList(RespValue value) {
+    static List<String> stringList(RespValue value) {
         if (value instanceof RespValue.Null) {
             return new ArrayList<String>();
         }
@@ -298,7 +305,7 @@ public final class BobaStrawAsyncCommands {
         return result;
     }
 
-    private static Set<String> stringSet(RespValue value) {
+    static Set<String> stringSet(RespValue value) {
         List<RespValue> values;
         if (value instanceof RespValue.SetValue) {
             values = ((RespValue.SetValue) value).values;
@@ -316,7 +323,7 @@ public final class BobaStrawAsyncCommands {
         return result;
     }
 
-    private static Map<String, String> stringMap(RespValue value) {
+    static Map<String, String> stringMap(RespValue value) {
         Map<String, String> result = new LinkedHashMap<String, String>();
         if (value instanceof RespValue.MapValue) {
             for (Map.Entry<RespValue, RespValue> entry : ((RespValue.MapValue) value).values.entrySet()) {

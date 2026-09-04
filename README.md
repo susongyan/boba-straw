@@ -6,7 +6,7 @@ Boba Straw is a lightweight, pure Java Redis and Valkey client. It uses a Java N
 
 ## Current status
 
-`0.1.0-SNAPSHOT` provides a standalone NIO client with RESP2/RESP3 negotiation and synchronous/`CompletionStage` APIs. Key and String coverage includes conditional/expiring `SET`, `MGET`/`MSET`, counters, range and bit operations, expiry management, rename and type commands; Hash, List, Set and sorted-set currently provide their basic operations. Sentinel, Cluster, TLS, Pub/Sub, transactions and scripts are not yet production-ready.
+`0.1.0-SNAPSHOT` provides a standalone NIO client with RESP2/RESP3 negotiation and synchronous/`CompletionStage` APIs. Key and String coverage includes conditional/expiring `SET`, `MGET`/`MSET`, counters, range and bit operations, expiry management, rename and type commands; Hash, List, Set and sorted-set currently provide their basic operations. Pipeline, dedicated transaction/Pub/Sub connections and scripts have basic implementations, but Sentinel, TLS and Cluster production behavior are not yet available.
 
 ```java
 try (BobaStrawClient client = BobaStrawClient.builder().uri("redis://localhost:6379").build()) {
@@ -43,6 +43,37 @@ BobaStrawClient client = BobaStrawClient.builder()
 
 普通命令默认按每个 Redis 节点复用一个共享多路复用连接，不需要配置连接池大小。事务、Pub/Sub 和阻塞命令使用独立连接。
 
+每条物理连接默认最多接纳 4,096 条尚未排空响应的应用命令和 16 MiB 尚未写入 socket 的
+编码命令帧。超过任一上限会立即得到 `BobaStrawBackpressureException`，命令不会发送到 Redis。
+通常无需调整；只有在清楚知道单连接并发和大 Pipeline 内存预算时才显式设置。默认值是否限制
+服务端吞吐、容量估算和监控方法见
+[`背压与连接容量规划`](docs/usage/backpressure-and-capacity.md)：
+
+```java
+BobaStrawConnectionLimits limits = BobaStrawConnectionLimits.builder()
+    .maxInFlightCommands(8_192)
+    .maxQueuedWriteBytes(32L * 1024L * 1024L)
+    .build();
+
+BobaStrawClient client = BobaStrawClient.builder()
+    .uri("redis://localhost:6379")
+    .connectionLimits(limits)
+    .reconnectInterval(Duration.ofSeconds(1))
+    .reconnectMaxInterval(Duration.ofSeconds(30))
+    .build();
+```
+
+共享 Standalone 连接断开后会按上述区间做指数退避重建，但绝不重放已经失败的命令。退避期间
+新调用明确以 `BobaStrawCommandNotSentException` 失败，不会为每次调用新建 socket。可通过
+无网络 I/O 的状态快照观察它：
+
+```java
+BobaStrawClientMetrics metrics = client.metrics();
+System.out.println(metrics.sharedConnectionState());
+System.out.println(metrics.inFlightCommands());
+System.out.println(metrics.queuedWriteBytes());
+```
+
 默认每个 Client 自己管理一个 Selector EventLoop。应用中有多个 Client、Cluster 或专用连接时，
 可显式共享 `BobaStrawClientResources`；`eventLoopThreads` 是 I/O 线程数量，不是连接池大小。
 外部传入的 Resources 由应用在关闭全部 Client 后统一关闭：
@@ -71,6 +102,10 @@ try (
 Pub/Sub listener，永不执行 socket I/O。普通命令会在写入前预留一个结果交付位；资源级 callback
 容量耗尽时返回 `BobaStrawBackpressureException`，命令不会发往 Redis。Pub/Sub 同一连接保持消息
 顺序；慢 listener 耗尽容量时会关闭该专用连接，而不会静默丢弃消息。
+
+callback 容量和 `connectionLimits` 是两层独立保护：前者防止业务 callback 积压，后者防止单条
+socket 的请求数和待写内存无界增长。同步 API 直接等待内部 transport 结果，因此不会被繁忙的
+callback worker 阻塞。
 
 共享连接默认不发送主动心跳；如需检测长时间空闲连接，可启用：
 

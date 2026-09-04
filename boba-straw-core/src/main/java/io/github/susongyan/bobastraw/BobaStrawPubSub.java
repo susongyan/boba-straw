@@ -4,6 +4,7 @@ import io.github.susongyan.bobastraw.internal.NioConnection;
 import io.github.susongyan.bobastraw.protocol.RespValue;
 
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 
 /** Pub/Sub facade backed by a connection dedicated to subscriptions. */
@@ -30,14 +31,35 @@ public final class BobaStrawPubSub {
                 }
             }
         });
-        CompletionStage<BobaStrawSubscription> subscription = client.executeOn(connection, "SUBSCRIBE", channel)
-            .thenApply(ignored -> new BobaStrawSubscription() {
+        CompletionStage<BobaStrawSubscription> subscription = BobaStrawStages.map(
+            client.executeOn(connection, "SUBSCRIBE", channel),
+            ignored -> new BobaStrawSubscription() {
+                private final AtomicBoolean closed = new AtomicBoolean();
+
                 @Override
                 public void close() {
-                    client.executeOn(connection, "UNSUBSCRIBE", channel)
-                        .whenComplete((value, error) -> client.closeDedicated(connection));
+                    if (!closed.compareAndSet(false, true)) {
+                        return;
+                    }
+                    connection.executeAfterPushCallbacks(
+                        new String[] { "UNSUBSCRIBE", channel },
+                        new Runnable() {
+                            @Override
+                            public void run() {
+                                client.onDedicatedPushCallbacksDrained(connection);
+                            }
+                        }
+                    )
+                        .whenComplete((value, error) -> {
+                            if (error == null) {
+                                client.closeDedicatedAfterAcknowledgement(connection);
+                            } else {
+                                client.closeDedicated(connection);
+                            }
+                        });
                 }
-        });
+            }
+        );
         subscription.whenComplete((value, error) -> {
             if (error != null) {
                 client.closeDedicated(connection);
@@ -59,14 +81,35 @@ public final class BobaStrawPubSub {
                 }
             }
         });
-        CompletionStage<BobaStrawSubscription> subscription = client.executeOn(connection, "PSUBSCRIBE", pattern)
-            .thenApply(ignored -> new BobaStrawSubscription() {
+        CompletionStage<BobaStrawSubscription> subscription = BobaStrawStages.map(
+            client.executeOn(connection, "PSUBSCRIBE", pattern),
+            ignored -> new BobaStrawSubscription() {
+                private final AtomicBoolean closed = new AtomicBoolean();
+
                 @Override
                 public void close() {
-                    client.executeOn(connection, "PUNSUBSCRIBE", pattern)
-                        .whenComplete((value, error) -> client.closeDedicated(connection));
+                    if (!closed.compareAndSet(false, true)) {
+                        return;
+                    }
+                    connection.executeAfterPushCallbacks(
+                        new String[] { "PUNSUBSCRIBE", pattern },
+                        new Runnable() {
+                            @Override
+                            public void run() {
+                                client.onDedicatedPushCallbacksDrained(connection);
+                            }
+                        }
+                    )
+                        .whenComplete((value, error) -> {
+                            if (error == null) {
+                                client.closeDedicatedAfterAcknowledgement(connection);
+                            } else {
+                                client.closeDedicated(connection);
+                            }
+                        });
                 }
-        });
+            }
+        );
         subscription.whenComplete((value, error) -> {
             if (error != null) {
                 client.closeDedicated(connection);

@@ -19,6 +19,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class BobaStrawProtocolNegotiationTest {
@@ -418,6 +419,122 @@ class BobaStrawProtocolNegotiationTest {
         server.close();
     }
 
+    @Test
+    void unsubscribeAcknowledgementWaitsForEarlierPubSubCallbacks() throws Exception {
+        Resp3PubSubBarrierServer server = new Resp3PubSubBarrierServer();
+        server.start();
+
+        CountDownLatch firstMessageStarted = new CountDownLatch(1);
+        CountDownLatch allowFirstMessage = new CountDownLatch(1);
+        CountDownLatch secondMessageDelivered = new CountDownLatch(1);
+        BobaStrawClientResources resources = BobaStrawClientResources.builder()
+            .callbackThreads(2)
+            .callbackQueueCapacity(8)
+            .build();
+        try (BobaStrawClient client = BobaStrawClient.builder()
+            .resources(resources)
+            .endpoint("127.0.0.1", server.port())
+            .protocol(ProtocolVersion.AUTO)
+            .commandTimeout(Duration.ofSeconds(2))
+            .build()) {
+            BobaStrawSubscription subscription = client.pubSub().subscribe("events", value -> {
+                if ("one".equals(value)) {
+                    firstMessageStarted.countDown();
+                    try {
+                        if (!allowFirstMessage.await(2, TimeUnit.SECONDS)) {
+                            throw new AssertionError("Timed out waiting to release the first listener");
+                        }
+                    } catch (InterruptedException error) {
+                        Thread.currentThread().interrupt();
+                        throw new AssertionError("Interrupted while waiting for the first listener", error);
+                    }
+                } else if ("two".equals(value)) {
+                    secondMessageDelivered.countDown();
+                }
+            }).toCompletableFuture().get(2, TimeUnit.SECONDS);
+
+            assertTrue(firstMessageStarted.await(2, TimeUnit.SECONDS));
+            subscription.close();
+            assertTrue(server.awaitUnsubscribe());
+            assertFalse(
+                secondMessageDelivered.await(150, TimeUnit.MILLISECONDS),
+                "The second callback must remain ordered behind the blocked first callback"
+            );
+            assertTrue(
+                server.awaitDedicatedClose(),
+                "The acknowledged subscription socket must be released without waiting for listeners"
+            );
+
+            allowFirstMessage.countDown();
+            assertTrue(secondMessageDelivered.await(2, TimeUnit.SECONDS));
+        } finally {
+            allowFirstMessage.countDown();
+            resources.close();
+        }
+
+        assertTrue(server.awaitCompletion());
+        server.close();
+    }
+
+    @Test
+    void clientCloseAbortsQueuedPubSubCallbacksAfterAcknowledgedUnsubscribe() throws Exception {
+        Resp3PubSubBarrierServer server = new Resp3PubSubBarrierServer();
+        server.start();
+
+        CountDownLatch firstMessageStarted = new CountDownLatch(1);
+        CountDownLatch allowFirstMessage = new CountDownLatch(1);
+        CountDownLatch secondMessageDelivered = new CountDownLatch(1);
+        BobaStrawClientResources resources = BobaStrawClientResources.builder()
+            .callbackThreads(2)
+            .callbackQueueCapacity(8)
+            .build();
+        BobaStrawClient client = BobaStrawClient.builder()
+            .resources(resources)
+            .endpoint("127.0.0.1", server.port())
+            .protocol(ProtocolVersion.AUTO)
+            .commandTimeout(Duration.ofSeconds(2))
+            .build();
+        try {
+            BobaStrawSubscription subscription = client.pubSub().subscribe("events", value -> {
+                if ("one".equals(value)) {
+                    firstMessageStarted.countDown();
+                    try {
+                        if (!allowFirstMessage.await(2, TimeUnit.SECONDS)) {
+                            throw new AssertionError("Timed out waiting to release the first listener");
+                        }
+                    } catch (InterruptedException error) {
+                        Thread.currentThread().interrupt();
+                        throw new AssertionError("Interrupted while waiting for the first listener", error);
+                    }
+                } else if ("two".equals(value)) {
+                    secondMessageDelivered.countDown();
+                }
+            }).toCompletableFuture().get(2, TimeUnit.SECONDS);
+
+            assertTrue(firstMessageStarted.await(2, TimeUnit.SECONDS));
+            subscription.close();
+            assertTrue(server.awaitUnsubscribe());
+            assertTrue(
+                server.awaitDedicatedClose(),
+                "The unsubscribe acknowledgement must release the dedicated transport first"
+            );
+
+            client.close();
+            allowFirstMessage.countDown();
+            assertFalse(
+                secondMessageDelivered.await(500, TimeUnit.MILLISECONDS),
+                "Client close must abort callbacks still queued behind the active listener"
+            );
+        } finally {
+            allowFirstMessage.countDown();
+            client.close();
+            resources.close();
+        }
+
+        assertTrue(server.awaitCompletion());
+        server.close();
+    }
+
     private static void await(CountDownLatch latch) throws IOException {
         try {
             if (!latch.await(2, TimeUnit.SECONDS)) {
@@ -682,6 +799,100 @@ class BobaStrawProtocolNegotiationTest {
             Throwable error = failure.get();
             if (error != null) {
                 throw new AssertionError("Fake RESP3 Pub/Sub overflow server failed", error);
+            }
+            return finished;
+        }
+
+        @Override
+        public void close() throws IOException {
+            serverSocket.close();
+        }
+    }
+
+    private static final class Resp3PubSubBarrierServer implements AutoCloseable {
+        private final ServerSocket serverSocket = new ServerSocket(0);
+        private final CountDownLatch complete = new CountDownLatch(2);
+        private final CountDownLatch unsubscribeReceived = new CountDownLatch(1);
+        private final CountDownLatch dedicatedClose = new CountDownLatch(1);
+        private final AtomicReference<Throwable> failure = new AtomicReference<Throwable>();
+
+        private Resp3PubSubBarrierServer() throws IOException {
+        }
+
+        private int port() {
+            return serverSocket.getLocalPort();
+        }
+
+        private void start() {
+            Thread acceptor = new Thread(new Runnable() {
+                @Override
+                public void run() {
+                    try {
+                        for (int index = 0; index < 2; index++) {
+                            startSession(serverSocket.accept());
+                        }
+                    } catch (Throwable error) {
+                        failure.compareAndSet(null, error);
+                        while (complete.getCount() > 0) {
+                            complete.countDown();
+                        }
+                    }
+                }
+            }, "fake-resp3-pubsub-barrier-acceptor");
+            acceptor.setDaemon(true);
+            acceptor.start();
+        }
+
+        private void startSession(final Socket socket) {
+            Thread sessionThread = new Thread(new Runnable() {
+                @Override
+                public void run() {
+                    try (Socket ignored = socket) {
+                        Session session = new Session(socket);
+                        assertEquals(Arrays.asList("HELLO", "3"), session.readCommand());
+                        session.write("+OK\r\n");
+                        List<String> command;
+                        try {
+                            command = session.readCommand();
+                        } catch (IOException closed) {
+                            return;
+                        }
+                        if (!"SUBSCRIBE".equals(command.get(0))) {
+                            throw new IOException("Expected SUBSCRIBE but received " + command);
+                        }
+                        assertEquals(Arrays.asList("SUBSCRIBE", "events"), command);
+                        session.write(">3\r\n+subscribe\r\n+events\r\n:1\r\n"
+                            + ">3\r\n+message\r\n+events\r\n+one\r\n"
+                            + ">3\r\n+message\r\n+events\r\n+two\r\n");
+                        assertEquals(Arrays.asList("UNSUBSCRIBE", "events"), session.readCommand());
+                        unsubscribeReceived.countDown();
+                        session.write(">3\r\n+unsubscribe\r\n+events\r\n:0\r\n");
+                        session.awaitClientClose();
+                        dedicatedClose.countDown();
+                    } catch (Throwable error) {
+                        failure.compareAndSet(null, error);
+                    } finally {
+                        complete.countDown();
+                    }
+                }
+            }, "fake-resp3-pubsub-barrier-session");
+            sessionThread.setDaemon(true);
+            sessionThread.start();
+        }
+
+        private boolean awaitUnsubscribe() throws InterruptedException {
+            return unsubscribeReceived.await(2, TimeUnit.SECONDS);
+        }
+
+        private boolean awaitDedicatedClose() throws InterruptedException {
+            return dedicatedClose.await(2, TimeUnit.SECONDS);
+        }
+
+        private boolean awaitCompletion() throws InterruptedException {
+            boolean finished = complete.await(2, TimeUnit.SECONDS);
+            Throwable error = failure.get();
+            if (error != null) {
+                throw new AssertionError("Fake RESP3 Pub/Sub barrier server failed", error);
             }
             return finished;
         }
