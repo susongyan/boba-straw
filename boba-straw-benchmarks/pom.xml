@@ -11,6 +11,7 @@
   <artifactId>boba-straw-benchmarks</artifactId>
   <name>Boba Straw Benchmarks</name>
   <properties>
+    <benchmark.shade.skip>false</benchmark.shade.skip>
     <jmh.version>1.37</jmh.version>
   </properties>
   <dependencies>
@@ -57,6 +58,7 @@
               <goal>shade</goal>
             </goals>
             <configuration>
+              <skip>${benchmark.shade.skip}</skip>
               <finalName>benchmarks</finalName>
               <createDependencyReducedPom>false</createDependencyReducedPom>
               <filters>
@@ -80,4 +82,55 @@
       </plugin>
     </plugins>
   </build>
+  <profiles>
+    <profile>
+      <id>thin-harness</id>
+      <properties>
+        <benchmark.shade.skip>true</benchmark.shade.skip>
+      </properties>
+      <build>
+        <plugins>
+          <plugin>
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-shade-plugin</artifactId>
+            <version>3.5.3</version>
+            <executions>
+              <execution>
+                <id>thin-harness</id>
+                <phase>package</phase>
+                <goals>
+                  <goal>shade</goal>
+                </goals>
+                <configuration>
+                  <skip>false</skip>
+                  <finalName>benchmarks-harness</finalName>
+                  <createDependencyReducedPom>false</createDependencyReducedPom>
+                  <artifactSet>
+                    <excludes>
+                      <exclude>io.github.susongyan:boba-straw-core</exclude>
+                    </excludes>
+                  </artifactSet>
+                  <filters>
+                    <filter>
+                      <artifact>*:*</artifact>
+                      <excludes>
+                        <exclude>META-INF/*.SF</exclude>
+                        <exclude>META-INF/*.DSA</exclude>
+                        <exclude>META-INF/*.RSA</exclude>
+                      </excludes>
+                    </filter>
+                  </filters>
+                  <transformers>
+                    <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
+                      <mainClass>org.openjdk.jmh.Main</mainClass>
+                    </transformer>
+                  </transformers>
+                </configuration>
+              </execution>
+            </executions>
+          </plugin>
+        </plugins>
+      </build>
+    </profile>
+  </profiles>
 </project>

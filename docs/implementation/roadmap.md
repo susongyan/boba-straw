@@ -39,7 +39,7 @@
 - [x] 阶段 3：读缓冲复用、gathering write 与公平预算
 - [x] 阶段 4：RESP 增量状态机与协议资源上限
 - [x] 阶段 5：统一 deadline、背压、回调、订阅分发隔离与连接 lifecycle
-- [~] 阶段 6：JMH harness 与本地 Redis/Valkey smoke 已落地；正式 A/B、故障注入和负载验收待执行
+- [~] 阶段 6：JMH harness、隔离 Core 的 ABBA runner 与本地 smoke 已落地；正式 A/B、故障注入和负载验收待执行
 
 验收原则：普通命令无需业务配置连接池大小；连接池只服务于状态型场景。
 

@@ -110,4 +110,27 @@ docs/benchmarks/results/<run-id>/
 Client endpoint/protocol/resources、同步 GET/SET、Pipeline 和 `RespCodec.Decoder`。不能让旧版本
 运行的 harness 引用阶段 5 新增的 Metrics 或容量 API。
 
+`prepare-ab-benchmarks.sh` 从 Git 对象导出三份隔离源码：基线、候选和 harness。harness 在基线
+源码树中编译，因此编译期就会阻止误用新 API；产物不包含 Core class，运行时由明确的
+`baseline-core.jar` 或 `candidate-core.jar` 提供。构建只使用临时 Maven 仓库，不安装同名
+SNAPSHOT，也不切换当前工作区：
+
+```bash
+./scripts/prepare-ab-benchmarks.sh \
+  ca078f4 <candidate-ref> <harness-ref> benchmark-results/ab-artifacts/<run-id>
+```
+
+完整 runner 固定使用 `baseline / candidate / candidate / baseline` 顺序。`smoke` 用于验证链接和
+运行路径，`full` 才能进入性能结论；网络目标会先启动或严格复用固定的 benchmark 容器：
+
+```bash
+./scripts/run-ab-benchmarks.sh \
+  smoke redis benchmark-results/ab-redis-smoke \
+  ca078f4 <candidate-ref> <harness-ref>
+```
+
+每个序列使用独立 JVM/JMH fork 和独立 JSON。汇总时按 benchmark、参数和 mode 对齐，吞吐报告
+`candidate / baseline`，延迟与分配报告 `baseline / candidate`，并同时给出两组配对比值与离散度，
+不能只选一次对候选最有利的结果。
+
 正式结果完成前，阶段 6 仍属于进行中；一次 smoke run 只能证明 runner 和真实网络路径可执行。
