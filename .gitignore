@@ -1,4 +1,6 @@
 target/
+benchmark-results/
+hs_err_pid*.log
 *.class
 .idea/
 .vscode/

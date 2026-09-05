@@ -39,7 +39,7 @@
 - [x] 阶段 3：读缓冲复用、gathering write 与公平预算
 - [x] 阶段 4：RESP 增量状态机与协议资源上限
 - [x] 阶段 5：统一 deadline、背压、回调、订阅分发隔离与连接 lifecycle
-- [ ] 阶段 6：JMH、故障注入和负载验收
+- [~] 阶段 6：JMH harness 与本地 Redis/Valkey smoke 已落地；正式 A/B、故障注入和负载验收待执行
 
 验收原则：普通命令无需业务配置连接池大小；连接池只服务于状态型场景。
 
@@ -95,8 +95,8 @@ stream；Client 在排空期间关闭会取消尚未开始的 listener。容量�
 
 阶段 6 性能验收计划：在阶段 4、5 完成后直接探测并安装缺少的本机 JDK、JMH、Colima
 容器镜像和观测工具；保留阶段 2 提交 `ca078f4` 与网络模型最终提交的可复跑基线。测试
-Redis 与 Valkey 的单命令、Pipeline、大 value、碎片响应、多 Client 共享 EventLoop 和
-慢消费者负载，记录吞吐、P50/P95/P99/P999、CPU、GC、分配率、线程数、socket I/O 和
+Redis 与 Valkey 的单命令、异步窗口、Pipeline、大 value、碎片响应、多 Client 共享 EventLoop、
+慢回调和慢消费者负载，记录吞吐、P50/P95/P99/P999、CPU、GC、分配率、线程数、socket I/O 和
 跨连接公平性；环境、命令、原始结果和结论统一保存至 `docs/benchmarks/`。
 
 ### 协议与连接

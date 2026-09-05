@@ -117,6 +117,9 @@ BobaStrawClient.builder()
 
 只有连接空闲超过该间隔时才会发送 PING；业务流量活跃时不会额外发送心跳。
 
+网络与 RESP 性能基准使用独立的 JMH 模块，环境、workload 和结果归档规则见
+[`性能基准`](docs/benchmarks/README.md)。
+
 事务专用池按需创建，可选配置其上限、获取等待和空闲回收：
 
 ```java
