@@ -39,7 +39,8 @@
 - [x] 阶段 3：读缓冲复用、gathering write 与公平预算
 - [x] 阶段 4：RESP 增量状态机与协议资源上限
 - [x] 阶段 5：统一 deadline、背压、回调、订阅分发隔离与连接 lifecycle
-- [~] 阶段 6：JMH harness、隔离 Core 的 ABBA runner 与本地 smoke 已落地；正式 A/B、故障注入和负载验收待执行
+- [~] 阶段 6：JMH harness、隔离 Core 的 ABBA runner 与 Redis critical 正式 A/B 已落地并通过；
+  Redis/Valkey 全 workload、系统观测和故障注入待执行
 
 验收原则：普通命令无需业务配置连接池大小；连接池只服务于状态型场景。
 
@@ -93,8 +94,11 @@ Standalone 连接由 close/ready lifecycle 驱动 capped exponential backoff；�
 stream；Client 在排空期间关闭会取消尚未开始的 listener。容量、取消、退避、同步隔离和
 退订顺序均由 socket 回归覆盖。
 
-阶段 6 性能验收计划：在阶段 4、5 完成后直接探测并安装缺少的本机 JDK、JMH、Colima
-容器镜像和观测工具；保留阶段 2 提交 `ca078f4` 与网络模型最终提交的可复跑基线。测试
+阶段 6 性能验收进度：已使用 JDK 21、Colima 和固定 2 CPU/2 GiB Redis 7.4.2 容器完成
+`ca078f4` 与 `7a2fe41` 的正式 Redis critical ABBA。候选版本的异步窗口吞吐、Pipeline 吞吐、
+慢回调隔离和共享 EventLoop 公平性均改善，原始 JSON、环境与结论见
+[`20260905-ca078f4-vs-7a2fe41-redis-critical`](../benchmarks/results/20260905-ca078f4-vs-7a2fe41-redis-critical/summary.md)。
+后续继续测试
 Redis 与 Valkey 的单命令、异步窗口、Pipeline、大 value、碎片响应、多 Client 共享 EventLoop、
 慢回调和慢消费者负载，记录吞吐、P50/P95/P99/P999、CPU、GC、分配率、线程数、socket I/O 和
 跨连接公平性；环境、命令、原始结果和结论统一保存至 `docs/benchmarks/`。

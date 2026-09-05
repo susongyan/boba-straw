@@ -405,7 +405,14 @@ in-flight/待写字节与本连接背压拒绝计数。
   reconnect；`BobaStrawClientResourcesTest` 覆盖同步 API 不受阻塞 callback 影响及派生 Future 取消；
   `BobaStrawProtocolNegotiationTest` 覆盖退订 barrier。完整 `mvn test` 已回归。
 
-### 阶段 6 性能验收计划（待阶段 4、5 完成后执行）
+### 阶段 6 性能验收（进行中）
+
+- Redis critical 正式 ABBA 已完成：阶段 2 基线 `ca078f4` 与候选 `7a2fe41` 使用同一份、在
+  baseline API 上编译的 harness，按 A/B/B/A 顺序运行。异步窗口吞吐改善 2.30 倍、Pipeline
+  吞吐改善 1.29 倍、慢回调隔离平均延迟改善 3.59 倍；原始数据和环境见
+  [`benchmark result`](../benchmarks/results/20260905-ca078f4-vs-7a2fe41-redis-critical/summary.md)。
+- 本结果只覆盖 Redis critical 子集，不替代以下完整验收；Valkey、Codec、大 value、系统观测与
+  故障注入完成前，阶段 6 仍保持进行中。
 
 - 先探测本机 JDK、Colima 与容器运行状况；缺少的 JDK、JMH 构建依赖、Redis / Valkey
   镜像和观测工具可直接安装。环境版本、镜像 digest、CPU 核数、内存、JVM 参数与命令必须

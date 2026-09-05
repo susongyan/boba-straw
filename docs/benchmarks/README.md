@@ -102,7 +102,7 @@ docs/benchmarks/results/<run-id>/
 `environment.txt` 由 runner 自动记录提交、运行前工作区状态、OS、JDK、Maven、JMH、完整执行档位，
 并在 Docker 可访问时追加 Colima 状态、Docker 版本、镜像标识、容器 CPU/内存限制和服务端
 `INFO server`。正式归档时还应补充测试期间的 CPU/内存采样。原始 JSON 必须保留，
-`summary.md` 不能替代原始数据。
+`summary.md` 不能替代原始数据；仓库归档可使用 `.json.gz` 无损压缩，并保存 SHA-256 校验文件。
 
 ## 历史提交 A/B
 
