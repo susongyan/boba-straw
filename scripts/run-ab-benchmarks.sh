@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 #
 # Runs the same thin JMH harness against baseline and candidate Core JARs in ABBA order.
-# Usage: run-ab-benchmarks.sh <smoke|full> <redis|valkey|codec|all> <result-dir> [baseline-ref] [candidate-ref] [harness-ref]
+# Usage: run-ab-benchmarks.sh <smoke|full> <redis|redis-critical|valkey|codec|all> <result-dir> [baseline-ref] [candidate-ref] [harness-ref]
 #
 set -eu
 
@@ -29,10 +29,10 @@ case "$profile" in
 esac
 
 case "$target" in
-    redis|valkey|codec|all)
+    redis|redis-critical|valkey|codec|all)
         ;;
     *)
-        echo "Unknown target: $target (expected redis, valkey, codec, or all)" >&2
+        echo "Unknown target: $target (expected redis, redis-critical, valkey, codec, or all)" >&2
         exit 2
         ;;
 esac
@@ -43,7 +43,7 @@ if [ -e "$result_dir" ]; then
 fi
 
 case "$target" in
-    redis|valkey|all)
+    redis|redis-critical|valkey|all)
         ./scripts/benchmark-up.sh
         ;;
 esac
@@ -61,10 +61,45 @@ baseline_core=$artifact_dir/baseline-core.jar
 candidate_core=$artifact_dir/candidate-core.jar
 
 {
+    echo "timestamp_utc=$run_id"
     echo "profile=$profile"
     echo "target=$target"
     echo "jmh_common_options=$common_options"
     echo "jmh_profiler_options=$profiler_options"
+    uname -a
+    if command -v colima >/dev/null 2>&1; then
+        echo "colima_status_begin"
+        colima status || true
+        echo "colima_status_end"
+    fi
+    if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+        echo "docker_version_begin"
+        docker version
+        echo "docker_version_end"
+        for container_name in \
+            boba-straw-benchmark-redis \
+            boba-straw-benchmark-valkey
+        do
+            if docker container inspect "$container_name" >/dev/null 2>&1; then
+                echo "container_begin=$container_name"
+                docker container inspect --format \
+                    'image={{.Config.Image}} image_id={{.Image}} cpus={{.HostConfig.NanoCpus}} memory={{.HostConfig.Memory}}' \
+                    "$container_name"
+                case "$container_name" in
+                    boba-straw-benchmark-redis)
+                        docker exec "$container_name" redis-cli INFO server
+                        ;;
+                    boba-straw-benchmark-valkey)
+                        docker exec "$container_name" valkey-cli INFO server
+                        ;;
+                esac
+                echo "container_end=$container_name"
+            fi
+        done
+    fi
+} >"$result_dir/environment.txt" 2>&1
+
+{
     echo "01=baseline"
     echo "02=candidate"
     echo "03=candidate"
@@ -74,11 +109,17 @@ candidate_core=$artifact_dir/candidate-core.jar
 run_codec() {
     core_jar=$1
     destination=$2
-    java -cp "$core_jar:$harness_jar" org.openjdk.jmh.Main \
+    log_file=$destination/codec-throughput.log
+    echo "Running $destination codec throughput"
+    if ! java -cp "$core_jar:$harness_jar" org.openjdk.jmh.Main \
         '.*RespCodecBenchmark.*' \
         $common_options $profiler_options \
         -bm thrpt -tu s -foe true \
-        -rf json -rff "$destination/codec-throughput.json"
+        -rf json -rff "$destination/codec-throughput.json" \
+        >"$log_file" 2>&1; then
+        tail -100 "$log_file" >&2
+        return 1
+    fi
 }
 
 run_network() {
@@ -87,19 +128,63 @@ run_network() {
     label=$3
     endpoint=$4
 
-    java -cp "$core_jar:$harness_jar" org.openjdk.jmh.Main \
+    throughput_log=$destination/$label-throughput.log
+    echo "Running $destination $label throughput"
+    if ! java -cp "$core_jar:$harness_jar" org.openjdk.jmh.Main \
         '.*(Redis(Command|Batch|LargeValue)Benchmark|AsyncWindowBenchmark).*' \
         -p endpoint="$endpoint" -p protocol=AUTO \
         $common_options $profiler_options \
         -bm thrpt -tu s -foe true \
-        -rf json -rff "$destination/$label-throughput.json"
+        -rf json -rff "$destination/$label-throughput.json" \
+        >"$throughput_log" 2>&1; then
+        tail -100 "$throughput_log" >&2
+        return 1
+    fi
 
-    java -cp "$core_jar:$harness_jar" org.openjdk.jmh.Main \
+    latency_log=$destination/$label-latency.log
+    echo "Running $destination $label sample-time"
+    if ! java -cp "$core_jar:$harness_jar" org.openjdk.jmh.Main \
         '.*(Redis(Command|Batch|LargeValue)Benchmark|AsyncWindowBenchmark|SharedEventLoopFairnessBenchmark|SlowCallbackIsolationBenchmark).*' \
         -p endpoint="$endpoint" -p protocol=AUTO \
         $common_options $profiler_options \
         -bm sample -tu us -foe true \
-        -rf json -rff "$destination/$label-latency.json"
+        -rf json -rff "$destination/$label-latency.json" \
+        >"$latency_log" 2>&1; then
+        tail -100 "$latency_log" >&2
+        return 1
+    fi
+}
+
+run_critical_network() {
+    core_jar=$1
+    destination=$2
+    endpoint=redis://127.0.0.1:17379
+
+    throughput_log=$destination/redis-critical-throughput.log
+    echo "Running $destination Redis critical throughput"
+    if ! java -cp "$core_jar:$harness_jar" org.openjdk.jmh.Main \
+        '.*(AsyncWindowBenchmark.asyncGetWindow1024|RedisBatchBenchmark.pipeline128).*' \
+        -p endpoint="$endpoint" -p protocol=AUTO \
+        $common_options $profiler_options \
+        -bm thrpt -tu s -foe true \
+        -rf json -rff "$destination/redis-critical-throughput.json" \
+        >"$throughput_log" 2>&1; then
+        tail -100 "$throughput_log" >&2
+        return 1
+    fi
+
+    latency_log=$destination/redis-critical-latency.log
+    echo "Running $destination Redis critical sample-time"
+    if ! java -cp "$core_jar:$harness_jar" org.openjdk.jmh.Main \
+        '.*(RedisBatchBenchmark.pipeline128|RedisCommandBenchmark.syncGet|SharedEventLoopFairnessBenchmark|SlowCallbackIsolationBenchmark).*' \
+        -p endpoint="$endpoint" -p protocol=AUTO \
+        $common_options $profiler_options \
+        -bm sample -tu us -foe true \
+        -rf json -rff "$destination/redis-critical-latency.json" \
+        >"$latency_log" 2>&1; then
+        tail -100 "$latency_log" >&2
+        return 1
+    fi
 }
 
 run_variant() {
@@ -115,6 +200,9 @@ run_variant() {
             ;;
         redis)
             run_network "$core_jar" "$destination" redis redis://127.0.0.1:17379
+            ;;
+        redis-critical)
+            run_critical_network "$core_jar" "$destination"
             ;;
         valkey)
             run_network "$core_jar" "$destination" valkey redis://127.0.0.1:17380

@@ -184,30 +184,48 @@ mkdir "$output_dir"
 } >>"$output_dir/environment.txt" 2>&1
 
 run_codec() {
-    java -jar "$benchmark_jar" \
+    log_file=$output_dir/codec-throughput.log
+    echo "Running codec throughput benchmark"
+    if ! java -jar "$benchmark_jar" \
         '.*RespCodecBenchmark.*' \
         $common_options $profiler_options \
         -bm thrpt -tu s -foe true \
-        -rf json -rff "$output_dir/codec-throughput.json"
+        -rf json -rff "$output_dir/codec-throughput.json" \
+        >"$log_file" 2>&1; then
+        tail -100 "$log_file" >&2
+        return 1
+    fi
 }
 
 run_network() {
     label=$1
     endpoint=$2
 
-    java -jar "$benchmark_jar" \
+    throughput_log=$output_dir/$label-throughput.log
+    echo "Running $label throughput benchmarks"
+    if ! java -jar "$benchmark_jar" \
         '.*(Redis(Command|Batch|LargeValue)Benchmark|AsyncWindowBenchmark).*' \
         -p endpoint="$endpoint" -p protocol=AUTO \
         $common_options $profiler_options \
         -bm thrpt -tu s -foe true \
-        -rf json -rff "$output_dir/$label-throughput.json"
+        -rf json -rff "$output_dir/$label-throughput.json" \
+        >"$throughput_log" 2>&1; then
+        tail -100 "$throughput_log" >&2
+        return 1
+    fi
 
-    java -jar "$benchmark_jar" \
+    latency_log=$output_dir/$label-latency.log
+    echo "Running $label sample-time benchmarks"
+    if ! java -jar "$benchmark_jar" \
         '.*(Redis(Command|Batch|LargeValue)Benchmark|AsyncWindowBenchmark|SharedEventLoopFairnessBenchmark|SlowCallbackIsolationBenchmark).*' \
         -p endpoint="$endpoint" -p protocol=AUTO \
         $common_options $profiler_options \
         -bm sample -tu us -foe true \
-        -rf json -rff "$output_dir/$label-latency.json"
+        -rf json -rff "$output_dir/$label-latency.json" \
+        >"$latency_log" 2>&1; then
+        tail -100 "$latency_log" >&2
+        return 1
+    fi
 }
 
 case "$target" in

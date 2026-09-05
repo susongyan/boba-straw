@@ -71,7 +71,8 @@ java -jar boba-straw-benchmarks/target/benchmarks.jar -l
 ```
 
 `full` 对每项执行 5 次预热、8 次测量、3 个 fork，并记录 JMH GC profiler；网络 workload
-分别输出 throughput 与 sample-time JSON。分析时至少报告 throughput、P50/P95/P99/P999、
+分别输出 throughput 与 sample-time JSON，并保留对应的 JMH 文本日志。分析时至少报告
+throughput、P50/P95/P99/P999、
 allocation rate、GC，以及 Pipeline 换算后的 commands/s。JMH 自带的 fork 控制通道会绑定本地
 回环端口，受限沙箱中需要允许该本地网络操作。
 
@@ -126,6 +127,16 @@ SNAPSHOT，也不切换当前工作区：
 ```bash
 ./scripts/run-ab-benchmarks.sh \
   smoke redis benchmark-results/ab-redis-smoke \
+  ca078f4 <candidate-ref> <harness-ref>
+```
+
+准备正式比较网络模型时，可先运行 `redis-critical`：它保留 `full` 的 5/8/3 统计档位，但只覆盖
+异步窗口 1024、Pipeline 128、同步 GET、共享 EventLoop 公平性和慢回调隔离，适合先验证网络模型
+的主要收益与风险，再决定是否执行耗时更长的 Redis、Valkey、Codec 全矩阵：
+
+```bash
+./scripts/run-ab-benchmarks.sh \
+  full redis-critical benchmark-results/ab-redis-critical \
   ca078f4 <candidate-ref> <harness-ref>
 ```
 
