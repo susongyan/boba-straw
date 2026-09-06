@@ -40,8 +40,8 @@
 - [x] 阶段 4：RESP 增量状态机与协议资源上限
 - [x] 阶段 5：统一 deadline、背压、回调、订阅分发隔离与连接 lifecycle
 - [~] 阶段 6：JMH harness、隔离 Core 的 ABBA runner、Redis critical 与 Codec 正式 A/B 已落地；
-  精确尺寸 RESP 编码优化已通过正式 ABBA，Valkey String 与 `byte[]` 大 value 基线已完成；
-  Redis 全 workload、系统观测和故障注入待执行
+  精确尺寸 RESP 编码优化已通过正式 ABBA，Redis 与 Valkey 全 workload/`byte[]` 大 value 基线已完成；
+  系统观测和故障注入待执行
 
 验收原则：普通命令无需业务配置连接池大小；连接池只服务于状态型场景。
 
@@ -110,9 +110,10 @@ Valkey 8.1.3 全网络基线也已完成，结果见
 同环境 `byte[]` 大 value 将 1 MiB allocation 从 String 的约 2.10 MiB/op 降至约 1.053 MiB/op，
 确认额外一份 payload 来自 String/UTF-8 转换，结果见
 [`20260906-b9ceff7-valkey-binary-large`](../benchmarks/results/20260906-b9ceff7-valkey-binary-large/summary.md)。
-后续继续测试 Redis 全 workload，以及碎片响应、多 Client 共享 EventLoop、
-慢回调和慢消费者负载，记录吞吐、P50/P95/P99/P999、CPU、GC、分配率、线程数、socket I/O 和
-跨连接公平性；环境、命令、原始结果和结论统一保存至 `docs/benchmarks/`。
+Redis 7.4.2 全 workload（含 String/`byte[]` 大 value）也已完成，结果见
+[`20260906-9b3f116-redis-full`](../benchmarks/results/20260906-9b3f116-redis-full/summary.md)。后续补充
+客户端/server CPU、线程数、socket I/O 等系统观测，并执行碎片响应、连接中断、慢消费者等故障注入；
+环境、命令、原始结果和结论统一保存至 `docs/benchmarks/`。
 
 ### 协议与连接
 

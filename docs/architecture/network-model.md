@@ -416,12 +416,13 @@ in-flight/待写字节与本连接背压拒绝计数。
   后续精确尺寸编码将 allocation 稳定降至 144 B/op，吞吐配对改善 1.82 倍。
   原始数据见 [`codec result`](../benchmarks/results/20260905-ca078f4-vs-7a2fe41-codec/summary.md)。
   修复验证见 [`encoder result`](../benchmarks/results/20260906-7a2fe41-vs-da546da-codec-encode/summary.md)。
-- 当前归档覆盖 Redis critical、Codec 和 Valkey 8.1.3 String Codec 全网络 baseline；Valkey 结果见
-  [`valkey result`](../benchmarks/results/20260906-0cbf813-valkey-full/summary.md)。它们不替代剩余
-  验收。Valkey `byte[]` 大 value 已确认内核约为 1x payload copy，String 的第 2x 主要来自
-  UTF-8/String 转换，见
-  [`binary result`](../benchmarks/results/20260906-b9ceff7-valkey-binary-large/summary.md)。仍需补 Redis
-  全量、系统观测与故障注入；完成前阶段 6 保持进行中。
+- 当前归档覆盖 Redis critical、Codec，以及 Redis 7.4.2 与 Valkey 8.1.3 全网络 baseline；结果见
+  [`redis result`](../benchmarks/results/20260906-9b3f116-redis-full/summary.md) 和
+  [`valkey result`](../benchmarks/results/20260906-0cbf813-valkey-full/summary.md)。两个服务端的
+  `byte[]` 大 value 均确认内核约为 1x payload copy，String 的第 2x 主要来自 UTF-8/String 转换；
+  Valkey 的独立 binary 结果见
+  [`binary result`](../benchmarks/results/20260906-b9ceff7-valkey-binary-large/summary.md)。仍需补系统观测与
+  故障注入；完成前阶段 6 保持进行中。
 
 - 先探测本机 JDK、Colima 与容器运行状况；缺少的 JDK、JMH 构建依赖、Redis / Valkey
   镜像和观测工具可直接安装。环境版本、镜像 digest、CPU 核数、内存、JVM 参数与命令必须
