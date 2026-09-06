@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 #
 # Runs the same thin JMH harness against baseline and candidate Core JARs in ABBA order.
-# Usage: run-ab-benchmarks.sh <smoke|full> <redis|redis-critical|valkey|codec|all> <result-dir> [baseline-ref] [candidate-ref] [harness-ref]
+# Usage: run-ab-benchmarks.sh <smoke|full> <redis|redis-critical|redis-binary-large|valkey|valkey-binary-large|codec|all> <result-dir> [baseline-ref] [candidate-ref] [harness-ref]
 #
 set -eu
 
@@ -29,10 +29,12 @@ case "$profile" in
 esac
 
 case "$target" in
-    redis|redis-critical|valkey|codec|all)
+    redis|redis-critical|redis-binary-large|valkey|valkey-binary-large|codec|all)
         ;;
     *)
-        echo "Unknown target: $target (expected redis, redis-critical, valkey, codec, or all)" >&2
+        echo "Unknown target: $target" >&2
+        echo "Expected redis, redis-critical, redis-binary-large, valkey," >&2
+        echo "valkey-binary-large, codec, or all." >&2
         exit 2
         ;;
 esac
@@ -43,7 +45,7 @@ if [ -e "$result_dir" ]; then
 fi
 
 case "$target" in
-    redis|redis-critical|valkey|all)
+    redis|redis-critical|redis-binary-large|valkey|valkey-binary-large|all)
         ./scripts/benchmark-up.sh
         ;;
 esac
@@ -131,7 +133,7 @@ run_network() {
     throughput_log=$destination/$label-throughput.log
     echo "Running $destination $label throughput"
     if ! java -cp "$core_jar:$harness_jar" org.openjdk.jmh.Main \
-        '.*(Redis(Command|Batch|LargeValue)Benchmark|AsyncWindowBenchmark).*' \
+        '.*(Redis(Command|Batch|LargeValue|BinaryLargeValue)Benchmark|AsyncWindowBenchmark).*' \
         -p endpoint="$endpoint" -p protocol=AUTO \
         $common_options $profiler_options \
         -bm thrpt -tu s -foe true \
@@ -144,7 +146,7 @@ run_network() {
     latency_log=$destination/$label-latency.log
     echo "Running $destination $label sample-time"
     if ! java -cp "$core_jar:$harness_jar" org.openjdk.jmh.Main \
-        '.*(Redis(Command|Batch|LargeValue)Benchmark|AsyncWindowBenchmark|SharedEventLoopFairnessBenchmark|SlowCallbackIsolationBenchmark).*' \
+        '.*(Redis(Command|Batch|LargeValue|BinaryLargeValue)Benchmark|AsyncWindowBenchmark|SharedEventLoopFairnessBenchmark|SlowCallbackIsolationBenchmark).*' \
         -p endpoint="$endpoint" -p protocol=AUTO \
         $common_options $profiler_options \
         -bm sample -tu us -foe true \
@@ -187,6 +189,39 @@ run_critical_network() {
     fi
 }
 
+run_binary_large() {
+    core_jar=$1
+    destination=$2
+    label=$3
+    endpoint=$4
+
+    throughput_log=$destination/$label-throughput.log
+    echo "Running $destination $label throughput"
+    if ! java -cp "$core_jar:$harness_jar" org.openjdk.jmh.Main \
+        '.*RedisBinaryLargeValueBenchmark.*' \
+        -p endpoint="$endpoint" -p protocol=AUTO \
+        $common_options $profiler_options \
+        -bm thrpt -tu s -foe true \
+        -rf json -rff "$destination/$label-throughput.json" \
+        >"$throughput_log" 2>&1; then
+        tail -100 "$throughput_log" >&2
+        return 1
+    fi
+
+    latency_log=$destination/$label-latency.log
+    echo "Running $destination $label sample-time"
+    if ! java -cp "$core_jar:$harness_jar" org.openjdk.jmh.Main \
+        '.*RedisBinaryLargeValueBenchmark.*' \
+        -p endpoint="$endpoint" -p protocol=AUTO \
+        $common_options $profiler_options \
+        -bm sample -tu us -foe true \
+        -rf json -rff "$destination/$label-latency.json" \
+        >"$latency_log" 2>&1; then
+        tail -100 "$latency_log" >&2
+        return 1
+    fi
+}
+
 run_variant() {
     sequence=$1
     variant=$2
@@ -204,8 +239,14 @@ run_variant() {
         redis-critical)
             run_critical_network "$core_jar" "$destination"
             ;;
+        redis-binary-large)
+            run_binary_large "$core_jar" "$destination" redis-binary-large redis://127.0.0.1:17379
+            ;;
         valkey)
             run_network "$core_jar" "$destination" valkey redis://127.0.0.1:17380
+            ;;
+        valkey-binary-large)
+            run_binary_large "$core_jar" "$destination" valkey-binary-large redis://127.0.0.1:17380
             ;;
         all)
             run_codec "$core_jar" "$destination"

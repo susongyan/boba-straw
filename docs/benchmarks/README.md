@@ -11,6 +11,7 @@
 | `AsyncWindowBenchmark` | 16、128、1024 个并发 in-flight GET 的异步提交与批量完成 |
 | `RedisBatchBenchmark` | 1、16、128 命令的真实 Pipeline 写入与响应排空 |
 | `RedisLargeValueBenchmark` | 1 KiB、64 KiB、1 MiB value 的 GET/SET |
+| `RedisBinaryLargeValueBenchmark` | 同尺寸 `byte[]` GET/SET，用于拆分协议复制与 String Codec 转换成本 |
 | `SharedEventLoopFairnessBenchmark` | 共享 EventLoop 时繁忙 Pipeline 对健康连接尾延迟的影响，并记录每个测量周期的 noisy commands |
 | `SlowCallbackIsolationBenchmark` | 5 ms 慢用户回调对同 EventLoop 健康连接尾延迟的影响，并记录每个测量周期的 noisy completions |
 | `RespCodecBenchmark` | 编码、Bulk、RESP3 aggregate、128 回复 burst 和逐字节碎片解析 |
@@ -59,6 +60,13 @@ java -jar boba-straw-benchmarks/target/benchmarks.jar -l
 
 ```bash
 ./scripts/run-benchmarks.sh smoke all
+```
+
+只分析 String Codec 与 transport 的大 value 复制差异时，可运行相同 1 KiB、64 KiB、1 MiB
+`byte[]` GET/SET 子集：
+
+```bash
+./scripts/run-benchmarks.sh full valkey-binary-large benchmark-results/valkey-binary-large
 ```
 
 未显式指定目录时，结果写入被 Git 忽略但不会被 Maven `clean` 删除的

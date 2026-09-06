@@ -1,6 +1,6 @@
 #!/usr/bin/env sh
 #
-# Usage: ./scripts/run-benchmarks.sh [smoke|full] [redis|valkey|codec|all] [output-dir]
+# Usage: ./scripts/run-benchmarks.sh [smoke|full] [redis|redis-binary-large|valkey|valkey-binary-large|codec|all] [output-dir]
 #
 set -eu
 
@@ -28,10 +28,11 @@ case "$profile" in
 esac
 
 case "$target" in
-    redis|valkey|codec|all)
+    redis|redis-binary-large|valkey|valkey-binary-large|codec|all)
         ;;
     *)
-        echo "Unknown target: $target (expected redis, valkey, codec, or all)" >&2
+        echo "Unknown target: $target" >&2
+        echo "Expected redis, redis-binary-large, valkey, valkey-binary-large, codec, or all." >&2
         exit 2
         ;;
 esac
@@ -80,10 +81,10 @@ fi
 
 if [ "$profile" = "full" ]; then
     case "$target" in
-        redis)
+        redis|redis-binary-large)
             require_full_container boba-straw-benchmark-redis 17379 "$redis_image"
             ;;
-        valkey)
+        valkey|valkey-binary-large)
             require_full_container boba-straw-benchmark-valkey 17380 "$valkey_image"
             ;;
         all)
@@ -204,7 +205,7 @@ run_network() {
     throughput_log=$output_dir/$label-throughput.log
     echo "Running $label throughput benchmarks"
     if ! java -jar "$benchmark_jar" \
-        '.*(Redis(Command|Batch|LargeValue)Benchmark|AsyncWindowBenchmark).*' \
+        '.*(Redis(Command|Batch|LargeValue|BinaryLargeValue)Benchmark|AsyncWindowBenchmark).*' \
         -p endpoint="$endpoint" -p protocol=AUTO \
         $common_options $profiler_options \
         -bm thrpt -tu s -foe true \
@@ -217,7 +218,38 @@ run_network() {
     latency_log=$output_dir/$label-latency.log
     echo "Running $label sample-time benchmarks"
     if ! java -jar "$benchmark_jar" \
-        '.*(Redis(Command|Batch|LargeValue)Benchmark|AsyncWindowBenchmark|SharedEventLoopFairnessBenchmark|SlowCallbackIsolationBenchmark).*' \
+        '.*(Redis(Command|Batch|LargeValue|BinaryLargeValue)Benchmark|AsyncWindowBenchmark|SharedEventLoopFairnessBenchmark|SlowCallbackIsolationBenchmark).*' \
+        -p endpoint="$endpoint" -p protocol=AUTO \
+        $common_options $profiler_options \
+        -bm sample -tu us -foe true \
+        -rf json -rff "$output_dir/$label-latency.json" \
+        >"$latency_log" 2>&1; then
+        tail -100 "$latency_log" >&2
+        return 1
+    fi
+}
+
+run_binary_large() {
+    label=$1
+    endpoint=$2
+
+    throughput_log=$output_dir/$label-throughput.log
+    echo "Running $label throughput benchmarks"
+    if ! java -jar "$benchmark_jar" \
+        '.*RedisBinaryLargeValueBenchmark.*' \
+        -p endpoint="$endpoint" -p protocol=AUTO \
+        $common_options $profiler_options \
+        -bm thrpt -tu s -foe true \
+        -rf json -rff "$output_dir/$label-throughput.json" \
+        >"$throughput_log" 2>&1; then
+        tail -100 "$throughput_log" >&2
+        return 1
+    fi
+
+    latency_log=$output_dir/$label-latency.log
+    echo "Running $label sample-time benchmarks"
+    if ! java -jar "$benchmark_jar" \
+        '.*RedisBinaryLargeValueBenchmark.*' \
         -p endpoint="$endpoint" -p protocol=AUTO \
         $common_options $profiler_options \
         -bm sample -tu us -foe true \
@@ -235,8 +267,14 @@ case "$target" in
     redis)
         run_network redis redis://127.0.0.1:17379
         ;;
+    redis-binary-large)
+        run_binary_large redis-binary-large redis://127.0.0.1:17379
+        ;;
     valkey)
         run_network valkey redis://127.0.0.1:17380
+        ;;
+    valkey-binary-large)
+        run_binary_large valkey-binary-large redis://127.0.0.1:17380
         ;;
     all)
         run_codec
