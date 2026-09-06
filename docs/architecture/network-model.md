@@ -412,8 +412,10 @@ in-flight/待写字节与本连接背压拒绝计数。
   吞吐改善 1.29 倍、慢回调隔离平均延迟改善 3.59 倍；原始数据和环境见
   [`benchmark result`](../benchmarks/results/20260905-ca078f4-vs-7a2fe41-redis-critical/summary.md)。
 - Codec 正式 ABBA 已完成：逐字节碎片解码吞吐改善 2.54 倍且 allocation 改善 559.57 倍，
-  128 回复 burst 吞吐改善 1.94 倍；GET 编码新增 48 B/op allocation，必须作为回退项修复。
+  128 回复 burst 吞吐改善 1.94 倍。初次 GET 编码 allocation 差异经对照不能归因于版本；
+  后续精确尺寸编码将 allocation 稳定降至 144 B/op，吞吐配对改善 1.82 倍。
   原始数据见 [`codec result`](../benchmarks/results/20260905-ca078f4-vs-7a2fe41-codec/summary.md)。
+  修复验证见 [`encoder result`](../benchmarks/results/20260906-7a2fe41-vs-da546da-codec-encode/summary.md)。
 - 当前归档只覆盖 Redis critical 与 Codec，不替代以下完整验收；Redis/Valkey 全网络 workload、
   大 value、系统观测与故障注入完成前，阶段 6 仍保持进行中。
 

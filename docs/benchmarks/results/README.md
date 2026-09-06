@@ -6,4 +6,5 @@
 | run | scope | status |
 | --- | --- | --- |
 | [`20260905-ca078f4-vs-7a2fe41-redis-critical`](20260905-ca078f4-vs-7a2fe41-redis-critical/summary.md) | Redis 7.4.2 critical ABBA | completed |
-| [`20260905-ca078f4-vs-7a2fe41-codec`](20260905-ca078f4-vs-7a2fe41-codec/summary.md) | RESP Codec ABBA | completed; encode allocation regression tracked |
+| [`20260905-ca078f4-vs-7a2fe41-codec`](20260905-ca078f4-vs-7a2fe41-codec/summary.md) | RESP Codec ABBA | completed; initial encode observation superseded |
+| [`20260906-7a2fe41-vs-da546da-codec-encode`](20260906-7a2fe41-vs-da546da-codec-encode/summary.md) | Exact-size RESP encoder ABBA | completed |
