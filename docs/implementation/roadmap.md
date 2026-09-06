@@ -39,8 +39,8 @@
 - [x] 阶段 3：读缓冲复用、gathering write 与公平预算
 - [x] 阶段 4：RESP 增量状态机与协议资源上限
 - [x] 阶段 5：统一 deadline、背压、回调、订阅分发隔离与连接 lifecycle
-- [~] 阶段 6：JMH harness、隔离 Core 的 ABBA runner 与 Redis critical 正式 A/B 已落地并通过；
-  Redis/Valkey 全 workload、系统观测和故障注入待执行
+- [~] 阶段 6：JMH harness、隔离 Core 的 ABBA runner、Redis critical 与 Codec 正式 A/B 已落地；
+  GET 编码 allocation 回退待修，Redis/Valkey 全 workload、系统观测和故障注入待执行
 
 验收原则：普通命令无需业务配置连接池大小；连接池只服务于状态型场景。
 
@@ -98,7 +98,10 @@ stream；Client 在排空期间关闭会取消尚未开始的 listener。容量�
 `ca078f4` 与 `7a2fe41` 的正式 Redis critical ABBA。候选版本的异步窗口吞吐、Pipeline 吞吐、
 慢回调隔离和共享 EventLoop 公平性均改善，原始 JSON、环境与结论见
 [`20260905-ca078f4-vs-7a2fe41-redis-critical`](../benchmarks/results/20260905-ca078f4-vs-7a2fe41-redis-critical/summary.md)。
-后续继续测试
+Codec 正式 ABBA 也已完成：碎片解码和回复 burst 显著改善，但 GET 编码增加 48 B/op allocation，
+已作为回退项记录于
+[`20260905-ca078f4-vs-7a2fe41-codec`](../benchmarks/results/20260905-ca078f4-vs-7a2fe41-codec/summary.md)。
+修复后继续测试
 Redis 与 Valkey 的单命令、异步窗口、Pipeline、大 value、碎片响应、多 Client 共享 EventLoop、
 慢回调和慢消费者负载，记录吞吐、P50/P95/P99/P999、CPU、GC、分配率、线程数、socket I/O 和
 跨连接公平性；环境、命令、原始结果和结论统一保存至 `docs/benchmarks/`。

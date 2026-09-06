@@ -411,8 +411,11 @@ in-flight/待写字节与本连接背压拒绝计数。
   baseline API 上编译的 harness，按 A/B/B/A 顺序运行。异步窗口吞吐改善 2.30 倍、Pipeline
   吞吐改善 1.29 倍、慢回调隔离平均延迟改善 3.59 倍；原始数据和环境见
   [`benchmark result`](../benchmarks/results/20260905-ca078f4-vs-7a2fe41-redis-critical/summary.md)。
-- 本结果只覆盖 Redis critical 子集，不替代以下完整验收；Valkey、Codec、大 value、系统观测与
-  故障注入完成前，阶段 6 仍保持进行中。
+- Codec 正式 ABBA 已完成：逐字节碎片解码吞吐改善 2.54 倍且 allocation 改善 559.57 倍，
+  128 回复 burst 吞吐改善 1.94 倍；GET 编码新增 48 B/op allocation，必须作为回退项修复。
+  原始数据见 [`codec result`](../benchmarks/results/20260905-ca078f4-vs-7a2fe41-codec/summary.md)。
+- 当前归档只覆盖 Redis critical 与 Codec，不替代以下完整验收；Redis/Valkey 全网络 workload、
+  大 value、系统观测与故障注入完成前，阶段 6 仍保持进行中。
 
 - 先探测本机 JDK、Colima 与容器运行状况；缺少的 JDK、JMH 构建依赖、Redis / Valkey
   镜像和观测工具可直接安装。环境版本、镜像 digest、CPU 核数、内存、JVM 参数与命令必须
