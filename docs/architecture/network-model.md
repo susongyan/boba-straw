@@ -416,8 +416,10 @@ in-flight/待写字节与本连接背压拒绝计数。
   后续精确尺寸编码将 allocation 稳定降至 144 B/op，吞吐配对改善 1.82 倍。
   原始数据见 [`codec result`](../benchmarks/results/20260905-ca078f4-vs-7a2fe41-codec/summary.md)。
   修复验证见 [`encoder result`](../benchmarks/results/20260906-7a2fe41-vs-da546da-codec-encode/summary.md)。
-- 当前归档只覆盖 Redis critical 与 Codec，不替代以下完整验收；Redis/Valkey 全网络 workload、
-  大 value、系统观测与故障注入完成前，阶段 6 仍保持进行中。
+- 当前归档覆盖 Redis critical、Codec 和 Valkey 8.1.3 String Codec 全网络 baseline；Valkey 结果见
+  [`valkey result`](../benchmarks/results/20260906-0cbf813-valkey-full/summary.md)。它们不替代剩余
+  验收：仍需补 Redis 全量、`byte[]` 大 value、系统观测与故障注入，以区分协议复制与
+  String/UTF-8 转换成本；完成前阶段 6 保持进行中。
 
 - 先探测本机 JDK、Colima 与容器运行状况；缺少的 JDK、JMH 构建依赖、Redis / Valkey
   镜像和观测工具可直接安装。环境版本、镜像 digest、CPU 核数、内存、JVM 参数与命令必须
