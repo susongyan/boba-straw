@@ -39,6 +39,22 @@ class RespCodecTest {
         assertEquals("*3\r\n$3\r\nSET\r\n$3\r\ntea\r\n$4\r\nboba\r\n", encoded);
     }
 
+    @Test
+    void encodesUtf8LengthAndMultiDigitBinaryLengthExactly() {
+        assertArrayEquals(
+            "*2\r\n$3\r\nGET\r\n$6\r\n奶茶\r\n".getBytes(StandardCharsets.UTF_8),
+            RespCodec.encodeCommand(new String[] { "GET", "奶茶" })
+        );
+
+        byte[] value = new byte[12];
+        Arrays.fill(value, (byte) 'b');
+        assertArrayEquals(
+            "*2\r\n$3\r\nSET\r\n$12\r\nbbbbbbbbbbbb\r\n"
+                .getBytes(StandardCharsets.US_ASCII),
+            RespCodec.encodeCommand(new byte[][] { ascii("SET"), value })
+        );
+    }
+
     @Test void decodesResp3AttributeAndReplyTogether() {
         RespCodec.Decoder decoder = new RespCodec.Decoder();
         byte[] reply = "|1\r\n+source\r\n+cache\r\n$2\r\nok\r\n".getBytes(StandardCharsets.US_ASCII);

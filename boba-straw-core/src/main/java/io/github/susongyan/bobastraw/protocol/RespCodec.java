@@ -2,7 +2,6 @@ package io.github.susongyan.bobastraw.protocol;
 
 import io.github.susongyan.bobastraw.BobaStrawProtocolException;
 
-import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -25,21 +24,55 @@ public final class RespCodec {
     }
 
     public static byte[] encodeCommand(byte[][] parts) {
-        ByteArrayOutputStream out = new ByteArrayOutputStream();
-        writeAscii(out, "*" + parts.length + "\r\n");
-
-        for (byte[] bytes : parts) {
-            writeAscii(out, "$" + bytes.length + "\r\n");
-            out.write(bytes, 0, bytes.length);
-            writeAscii(out, "\r\n");
+        long encodedLength = 1L + decimalLength(parts.length) + 2L;
+        for (byte[] part : parts) {
+            encodedLength += 1L + decimalLength(part.length) + 2L + part.length + 2L;
+            if (encodedLength > Integer.MAX_VALUE) {
+                throw new IllegalArgumentException("Encoded Redis command exceeds JVM array limit");
+            }
         }
 
-        return out.toByteArray();
+        byte[] encoded = new byte[(int) encodedLength];
+        int offset = 0;
+        encoded[offset++] = '*';
+        offset = writeDecimal(encoded, offset, parts.length);
+        offset = writeCrLf(encoded, offset);
+
+        for (byte[] part : parts) {
+            encoded[offset++] = '$';
+            offset = writeDecimal(encoded, offset, part.length);
+            offset = writeCrLf(encoded, offset);
+            System.arraycopy(part, 0, encoded, offset, part.length);
+            offset += part.length;
+            offset = writeCrLf(encoded, offset);
+        }
+        return encoded;
     }
 
-    private static void writeAscii(ByteArrayOutputStream out, String value) {
-        byte[] bytes = value.getBytes(StandardCharsets.US_ASCII);
-        out.write(bytes, 0, bytes.length);
+    private static int decimalLength(int value) {
+        int length = 1;
+        while (value >= 10) {
+            value /= 10;
+            length++;
+        }
+        return length;
+    }
+
+    private static int writeDecimal(byte[] target, int offset, int value) {
+        int length = decimalLength(value);
+        int cursor = offset + length;
+        int remaining = value;
+        do {
+            target[--cursor] = (byte) ('0' + remaining % 10);
+            remaining /= 10;
+        } while (remaining != 0);
+        return offset + length;
+    }
+
+    private static int writeCrLf(byte[] target, int offset) {
+        target[offset] = '\r';
+        target[offset + 1] = '\n';
+        return offset + 2;
     }
 
     /**
