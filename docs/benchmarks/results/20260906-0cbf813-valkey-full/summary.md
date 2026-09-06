@@ -15,8 +15,9 @@
   为 1,372,544 条 noisy commands；慢 callback 场景健康 GET 平均/P99 为 **1.66/5.02 ms**，
   同期辅助完成计数为 6,461。
 - 1 MiB GET/SET 吞吐约 **46.0/66.4 ops/s**；GET P99 达到 **143 ms**，明显高于 SET 的
-  36.2 ms。两者 allocation 均约 2.10 MiB/op，主要包含 String/UTF-8 转换与 RESP frame/payload
-  复制；需要增加同尺寸 `byte[]` workload 后再区分协议内核复制和 String Codec 固有成本。
+  36.2 ms。两者 allocation 均约 2.10 MiB/op。后续同尺寸 `byte[]` 正式结果约为 1.053 MiB/op，
+  已确认额外一份 payload 主要来自 String/UTF-8 转换；详见
+  [`binary large-value baseline`](../20260906-b9ceff7-valkey-binary-large/summary.md)。
 
 ## Throughput
 
