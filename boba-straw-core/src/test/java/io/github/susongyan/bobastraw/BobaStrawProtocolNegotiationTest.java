@@ -16,6 +16,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -74,6 +75,7 @@ class BobaStrawProtocolNegotiationTest {
     }
 
     @Test
+    @Tag("fault-injection")
     void attributeWrappedPushDoesNotConsumeTheNextCommandResponse() throws Exception {
         FakeRedisServer server = new FakeRedisServer(new SessionHandler() {
             @Override
@@ -98,6 +100,7 @@ class BobaStrawProtocolNegotiationTest {
     }
 
     @Test
+    @Tag("fault-injection")
     void cancellationDrainsItsResponseBeforeCompletingTheNextRequest() throws Exception {
         CountDownLatch commandsReceived = new CountDownLatch(1);
         CountDownLatch repliesAllowed = new CountDownLatch(1);
@@ -135,6 +138,7 @@ class BobaStrawProtocolNegotiationTest {
     }
 
     @Test
+    @Tag("fault-injection")
     void pipelineCancellationPropagatesToConnectionResponseDraining() throws Exception {
         CountDownLatch commandsReceived = new CountDownLatch(1);
         CountDownLatch repliesAllowed = new CountDownLatch(1);
@@ -173,6 +177,7 @@ class BobaStrawProtocolNegotiationTest {
     }
 
     @Test
+    @Tag("fault-injection")
     void disconnectAfterWriteReportsThatTheCommandMayHaveExecuted() throws Exception {
         FakeRedisServer server = new FakeRedisServer(new SessionHandler() {
             @Override
@@ -201,6 +206,7 @@ class BobaStrawProtocolNegotiationTest {
     }
 
     @Test
+    @Tag("fault-injection")
     void protocolLimitClosesTheConnectionAndPreservesAmbiguousDelivery() throws Exception {
         FakeRedisServer server = new FakeRedisServer(new SessionHandler() {
             @Override
@@ -235,6 +241,7 @@ class BobaStrawProtocolNegotiationTest {
     }
 
     @Test
+    @Tag("fault-injection")
     void commandTimeoutIsOwnedByTheConnectionEventLoop() throws Exception {
         FakeRedisServer server = new FakeRedisServer(new SessionHandler() {
             @Override
@@ -263,6 +270,7 @@ class BobaStrawProtocolNegotiationTest {
     }
 
     @Test
+    @Tag("fault-injection")
     void timedOutResponseIsDrainedBeforeTheFollowingCommandCompletes() throws Exception {
         CountDownLatch firstCommandReceived = new CountDownLatch(1);
         FakeRedisServer server = new FakeRedisServer(new SessionHandler() {
@@ -301,6 +309,7 @@ class BobaStrawProtocolNegotiationTest {
     }
 
     @Test
+    @Tag("fault-injection")
     void connectionFailureBeforeHandshakeReportsThatTheCommandWasNotSent() throws Exception {
         ServerSocket reservation = new ServerSocket(0);
         int unavailablePort = reservation.getLocalPort();
@@ -351,6 +360,7 @@ class BobaStrawProtocolNegotiationTest {
     }
 
     @Test
+    @Tag("fault-injection")
     void pubSubEstablishmentTimeoutClosesTheDedicatedConnection() throws Exception {
         Resp3PubSubServer server = new Resp3PubSubServer(false);
         server.start();
@@ -377,6 +387,7 @@ class BobaStrawProtocolNegotiationTest {
     }
 
     @Test
+    @Tag("fault-injection")
     void slowPubSubListenerClosesItsDedicatedConnectionInsteadOfDroppingMessages() throws Exception {
         Resp3PubSubOverflowServer server = new Resp3PubSubOverflowServer();
         server.start();
@@ -420,6 +431,7 @@ class BobaStrawProtocolNegotiationTest {
     }
 
     @Test
+    @Tag("fault-injection")
     void unsubscribeAcknowledgementWaitsForEarlierPubSubCallbacks() throws Exception {
         Resp3PubSubBarrierServer server = new Resp3PubSubBarrierServer();
         server.start();
@@ -477,6 +489,7 @@ class BobaStrawProtocolNegotiationTest {
     }
 
     @Test
+    @Tag("fault-injection")
     void clientCloseAbortsQueuedPubSubCallbacksAfterAcknowledgedUnsubscribe() throws Exception {
         Resp3PubSubBarrierServer server = new Resp3PubSubBarrierServer();
         server.start();

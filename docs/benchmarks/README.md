@@ -165,3 +165,11 @@ SNAPSHOT，也不切换当前工作区：
 不能只选一次对候选最有利的结果。
 
 正式结果完成前，阶段 6 仍属于进行中；一次 smoke run 只能证明 runner 和真实网络路径可执行。
+
+协议与生命周期故障不依赖概率性网络扰动，使用独立的确定性 socket 套件验收：
+
+```bash
+./scripts/run-fault-injection-tests.sh benchmark-results/fault-injection-<run-id>
+```
+
+故障矩阵和失败语义见 [`网络故障注入验收`](../testing/fault-injection.md)。

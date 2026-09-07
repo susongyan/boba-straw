@@ -8,6 +8,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
@@ -104,6 +105,7 @@ class RespCodecTest {
     }
 
     @Test
+    @Tag("fault-injection")
     void decodesNestedResp3AttributeAcrossEveryWireSplitWithoutPublishingEarly() {
         byte[] wire = ascii(
             "|1\r\n+source\r\n+cache\r\n*2\r\n$3\r\none\r\n%1\r\n+tea\r\n+milk\r\n"
@@ -128,6 +130,7 @@ class RespCodecTest {
     }
 
     @Test
+    @Tag("fault-injection")
     void copiesFragmentedBulkPayloadBeforeTheSourceArrayCanBeReused() {
         RespCodec.Decoder decoder = new RespCodec.Decoder();
         byte[] firstChunk = ascii("$5\r\nhe");
@@ -143,6 +146,7 @@ class RespCodecTest {
     }
 
     @Test
+    @Tag("fault-injection")
     void decodesALargeFragmentedBulkAndTheFollowingReplyInWireOrder() {
         byte[] payload = new byte[16 * 1024];
         Arrays.fill(payload, (byte) 'b');
@@ -168,6 +172,7 @@ class RespCodecTest {
     }
 
     @Test
+    @Tag("fault-injection")
     void rejectsMalformedWireAndKeepsTheProtocolFailureTerminal() {
         assertMalformed("#x\r\n");
         assertMalformed("_not-null\r\n");
@@ -180,6 +185,7 @@ class RespCodecTest {
     }
 
     @Test
+    @Tag("fault-injection")
     void acceptsTheCrLfLineTerminatorWhenItArrivesInSeparateFragments() {
         RespCodec.Decoder decoder = new RespCodec.Decoder();
         byte[] beforeLf = ascii("+PONG\r");
@@ -190,6 +196,7 @@ class RespCodecTest {
     }
 
     @Test
+    @Tag("fault-injection")
     void decodesFragmentedAttributePushAndNormalReplyInWireOrder() {
         byte[] wire = ascii(
             "|1\r\n+source\r\n+cache\r\n>3\r\n+message\r\n+events\r\n+tea\r\n+PONG\r\n"

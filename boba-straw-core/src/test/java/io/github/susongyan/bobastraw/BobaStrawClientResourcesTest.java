@@ -2,6 +2,7 @@ package io.github.susongyan.bobastraw;
 
 import io.github.susongyan.bobastraw.protocol.RespValue;
 
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 import java.io.BufferedInputStream;
@@ -200,6 +201,7 @@ class BobaStrawClientResourcesTest {
     }
 
     @Test
+    @Tag("fault-injection")
     void oneConnectionFailureDoesNotStopOtherConnectionsOnTheSameLoop() throws Exception {
         DisconnectingServer failing = new DisconnectingServer();
         PingServer healthy = new PingServer(1, false);
@@ -233,6 +235,7 @@ class BobaStrawClientResourcesTest {
     }
 
     @Test
+    @Tag("fault-injection")
     void resourceShutdownFailsInFlightWorkAndRejectsNewCommands() throws Exception {
         SlowServer server = new SlowServer();
         server.start();

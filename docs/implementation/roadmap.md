@@ -41,7 +41,7 @@
 - [x] 阶段 5：统一 deadline、背压、回调、订阅分发隔离与连接 lifecycle
 - [~] 阶段 6：JMH harness、隔离 Core 的 ABBA runner、Redis critical 与 Codec 正式 A/B 已落地；
   精确尺寸 RESP 编码优化已通过正式 ABBA，Redis 与 Valkey 全 workload/`byte[]` 大 value 基线已完成；
-  系统观测和故障注入待执行
+  Redis 系统观测和确定性故障注入已完成，Valkey 系统观测与 instrumentation 隔离 A/B 待执行
 
 验收原则：普通命令无需业务配置连接池大小；连接池只服务于状态型场景。
 
@@ -121,6 +121,12 @@ Redis 7.4.2 全 workload（含 String/`byte[]` 大 value）也已完成，结果
 [`20260907-9dfa609-redis-observe`](../benchmarks/results/20260907-9dfa609-redis-observe/summary.md)：
 Pipeline 128 精确命中 32 commands/write，已将 gathering frame 上限识别为后续 A/B 候选。
 Valkey 正式观测和 instrumentation 隔离 A/B 未完成前，阶段 6 仍保持进行中。
+
+确定性网络故障注入已整理为独立的 `fault-injection` JUnit 标签与
+[`run-fault-injection-tests.sh`](../../scripts/run-fault-injection-tests.sh) 入口。覆盖 RESP 任意分片、
+有界/部分写、回复 burst、写后断连、握手失败、超时/取消后的迟到回复、共享 EventLoop 单连接
+故障、慢 Pub/Sub listener 和退订关闭竞态；失败分类与资源生命周期验收矩阵见
+[`fault-injection.md`](../testing/fault-injection.md)。
 
 ### 协议与连接
 
@@ -213,7 +219,8 @@ Valkey 正式观测和 instrumentation 隔离 A/B 未完成前，阶段 6 仍保
 - [ ] Sentinel 主节点发现和切换感知
 - [ ] Cluster 完整拓扑、故障切换和多 Key 校验
 - [ ] Spring Boot Health、Micrometer、Actuator、多客户端
-- [ ] 故障注入、并发和 JMH 测试
+- [x] 确定性网络故障注入测试及独立执行入口
+- [~] 并发与 JMH 测试（正式基线已覆盖主要路径，Valkey 观测与 instrumentation 隔离 A/B 待完成）
 - [ ] Checkstyle、SpotBugs、ArchUnit、JaCoCo、Revapi/japicmp、Enforcer 门禁
 - [ ] LICENSE、NOTICE、Maven Central 发布元数据
 

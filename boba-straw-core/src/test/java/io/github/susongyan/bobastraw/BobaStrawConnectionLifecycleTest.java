@@ -2,6 +2,7 @@ package io.github.susongyan.bobastraw;
 
 import io.github.susongyan.bobastraw.protocol.RespValue;
 
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 import java.io.BufferedInputStream;
@@ -66,6 +67,7 @@ class BobaStrawConnectionLifecycleTest {
     }
 
     @Test
+    @Tag("fault-injection")
     void transportCancellationKeepsItsResponseSlotUntilTheResponseIsDrained() throws Exception {
         HoldingPingServer server = new HoldingPingServer(2);
         server.start();
@@ -140,6 +142,7 @@ class BobaStrawConnectionLifecycleTest {
     }
 
     @Test
+    @Tag("fault-injection")
     void failedHandshakeUsesCappedExponentialReconnectAndReportsReadyMetrics() throws Exception {
         HelloFlakyServer server = new HelloFlakyServer(3);
         server.start();

@@ -428,6 +428,9 @@ in-flight/待写字节与本连接背压拒绝计数。
   socket 次数/字节辅助计数，以及 fork JVM 和容器的系统采样。Redis 正式结果已归档于
   [`redis observation`](../benchmarks/results/20260907-9dfa609-redis-observe/summary.md)；Valkey 结果与
   instrumentation 隔离 A/B 尚未完成。
+- 确定性网络故障注入通过 `fault-injection` JUnit 标签独立执行，覆盖 wire 分片、部分写预算、
+  回复 burst、写后断连、取消/超时 drain、连接隔离、慢 Pub/Sub listener 与退订竞态。矩阵和
+  复跑命令见 [`fault-injection`](../testing/fault-injection.md)。
 
 - 先探测本机 JDK、Colima 与容器运行状况；缺少的 JDK、JMH 构建依赖、Redis / Valkey
   镜像和观测工具可直接安装。环境版本、镜像 digest、CPU 核数、内存、JVM 参数与命令必须

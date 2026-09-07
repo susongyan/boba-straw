@@ -3,6 +3,7 @@ package io.github.susongyan.bobastraw.internal;
 import io.github.susongyan.bobastraw.BobaStrawConnectionException;
 import io.github.susongyan.bobastraw.ProtocolVersion;
 import io.github.susongyan.bobastraw.protocol.RespValue;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 import java.io.BufferedInputStream;
@@ -27,6 +28,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+@Tag("fault-injection")
 class NioConnectionIoTest {
     @Test
     void gathersBoundedWritesWithoutCorruptingALargeFrameOrFifoOrder() throws Exception {
