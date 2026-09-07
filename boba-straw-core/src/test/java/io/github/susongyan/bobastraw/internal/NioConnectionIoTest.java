@@ -31,6 +31,37 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 @Tag("fault-injection")
 class NioConnectionIoTest {
     @Test
+    void defaultGatheringLimitWritesPipeline128InOneSocketOperation() throws Exception {
+        final int commandCount = 128;
+        CommandServer server = new CommandServer(commandCount, repeatedPongsText(commandCount));
+        server.start();
+
+        NioEventLoopGroup eventLoops = new NioEventLoopGroup(1, NioIoLimits.DEFAULT);
+        NioConnection connection = connection(eventLoops.next(), server.port());
+        List<String[]> commands = new ArrayList<String[]>(commandCount);
+        for (int index = 0; index < commandCount; index++) {
+            commands.add(new String[] { "PING" });
+        }
+        try {
+            List<RespValue> responses = connection.executeBatch(commands)
+                .toCompletableFuture()
+                .get(2, TimeUnit.SECONDS);
+
+            assertEquals(commandCount, responses.size());
+            for (RespValue response : responses) {
+                assertEquals("PONG", response.asString());
+            }
+            assertEquals(1L, connection.socketWriteOperations());
+        } finally {
+            connection.close();
+            eventLoops.close();
+        }
+
+        assertTrue(server.awaitCompletion());
+        server.close();
+    }
+
+    @Test
     void gathersBoundedWritesWithoutCorruptingALargeFrameOrFifoOrder() throws Exception {
         CommandServer server = new CommandServer(2, "+OK\r\n+PONG\r\n");
         server.start();

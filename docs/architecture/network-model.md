@@ -122,7 +122,7 @@ sequenceDiagram
     App->>Nio: Selector.wakeup()
     Nio->>Queue: drain tasks
     Nio->>Nio: 加入 outbound FIFO
-    Nio->>Redis: gathering write, max 32 frames / 64 KiB
+    Nio->>Redis: gathering write, max 128 frames / 64 KiB
     Nio->>Nio: 实际写入字节归还 write-byte capacity
     Nio->>Nio: 完整帧从 outbound 移至 pending
     Redis-->>Nio: RESP response / Push / Attribute
@@ -186,13 +186,14 @@ QUEUED -> CANCELLED
 
 ## 网络、协议与分发
 
-阶段 3 已将 EventLoop 单轮服务切片固定为：最多执行 256 个跨线程任务，处理 selector
-事件，然后让每条被选中的连接最多读 64 KiB、聚合写 32 帧 / 64 KiB，并最多分发 64 个
+EventLoop 单轮服务切片固定为：最多执行 256 个跨线程任务，处理 selector 事件，然后让每条
+被选中的连接最多读 64 KiB、聚合写 128 帧 / 64 KiB，并最多分发 64 个
 完整 RESP 响应。若任务积压或 decoder 已有完整响应待分发，loop 使用 `selectNow()`，
 而不是等待正常的最多 100 ms selector 超时。
 
 这些数值由 package-private `NioIoLimits` 管理，暂不暴露为业务配置；它们是公平性保护，
-不是吞吐调优承诺，后续以 JMH 与负载压测结果校准。
+不是吞吐调优承诺。阶段 6 根据 Redis/Valkey 的 socket observation 把 frame 上限从 32 提高为
+128 候选值，同时保留 64 KiB 字节预算；正式 ABBA 和公平性回归通过后才视为最终校准结果。
 
 ```mermaid
 graph TD
@@ -207,14 +208,14 @@ graph TD
     Decode --> Dispatch[最多分发 64 响应 命中上限立即让出]
     Read -->|否| Write
     Dispatch --> Write{可写或有 outbound}
-    Write -->|是| Flush[gathering write 最多 32 帧 64 KiB]
+    Write -->|是| Flush[gathering write 最多 128 帧 64 KiB]
     Write -->|否| Tick
     Flush --> Tick[处理 deferred response arm write idle check]
     Tick --> Begin
 ```
 
 - 写入使用连接私有的可复用 `ByteBuffer[]`、请求引用和写前 position 数组；一次
-  `SocketChannel.write(ByteBuffer[])` 最多聚合 32 帧和 64 KiB。若最后一帧被预算截断，
+  `SocketChannel.write(ByteBuffer[])` 最多聚合 128 帧和 64 KiB。若最后一帧被预算截断，
   临时收窄的 limit 必须在推进 `outbound -> pending` 前恢复，防止响应 FIFO 错位。
 - 每个连接复用 heap 读缓冲；最大一次读服务为 64 KiB，但达到完整响应分发上限时不会
   继续向 decoder 灌入数据。decoder 使用可 compact 的内部输入缓冲；一个 Bulk payload

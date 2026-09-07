@@ -40,8 +40,8 @@
 - [x] 阶段 4：RESP 增量状态机与协议资源上限
 - [x] 阶段 5：统一 deadline、背压、回调、订阅分发隔离与连接 lifecycle
 - [~] 阶段 6：JMH harness、隔离 Core 的 ABBA runner、Redis critical 与 Codec 正式 A/B 已落地；
-  精确尺寸 RESP 编码优化已通过正式 ABBA，Redis 与 Valkey 全 workload/`byte[]` 大 value 基线已完成；
-  Redis 系统观测和确定性故障注入已完成，Valkey 系统观测与 instrumentation 隔离 A/B 待执行
+  精确尺寸 RESP 编码优化已通过正式 ABBA，Redis 与 Valkey 全 workload/`byte[]` 大 value、系统观测、
+  instrumentation 隔离 A/B 和确定性故障注入已完成；gathering frame 128 候选等待正式 A/B 与公平性复核
 
 验收原则：普通命令无需业务配置连接池大小；连接池只服务于状态型场景。
 
@@ -126,6 +126,10 @@ Valkey 正式结果见
 未观察到可分辨的实质吞吐或 allocation 回归，结果见
 [`20260907-c4d9898-vs-9dfa609-transport-overhead`](../benchmarks/results/20260907-c4d9898-vs-9dfa609-transport-overhead/summary.md)。
 gathering frame 候选优化尚未验收，因此阶段 6 仍保持进行中。
+
+gathering frame 候选已把默认值从 32 提高为 128，仍保留每连接每轮 64 KiB 写预算；
+`NioConnectionIoTest` 验证 Pipeline 128 的一次 gathering write、完整响应与 FIFO。正式 ABBA、
+共享 EventLoop 公平性和完整回归完成前，该候选不计入阶段 6 完成项。
 
 确定性网络故障注入已整理为独立的 `fault-injection` JUnit 标签与
 [`run-fault-injection-tests.sh`](../../scripts/run-fault-injection-tests.sh) 入口。覆盖 RESP 任意分片、
