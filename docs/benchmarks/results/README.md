@@ -13,3 +13,4 @@
 | [`20260906-9b3f116-redis-full`](20260906-9b3f116-redis-full/summary.md) | Redis 7.4.2 full network baseline | completed |
 | [`20260907-9dfa609-redis-observe`](20260907-9dfa609-redis-observe/summary.md) | Redis 7.4.2 transport and system observation | completed |
 | [`20260907-9ece1c7-valkey-observe`](20260907-9ece1c7-valkey-observe/summary.md) | Valkey 8.1.3 transport and system observation | completed |
+| [`20260907-c4d9898-vs-9dfa609-transport-overhead`](20260907-c4d9898-vs-9dfa609-transport-overhead/summary.md) | Socket instrumentation Redis ABBA | completed; no distinguishable material overhead |
