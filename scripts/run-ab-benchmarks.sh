@@ -5,6 +5,8 @@
 #
 set -eu
 
+. ./scripts/benchmark-run-lock.sh
+
 profile=${1:-smoke}
 target=${2:-codec}
 run_id=$(date -u +%Y%m%dT%H%M%SZ)
@@ -40,6 +42,9 @@ case "$target" in
         exit 2
         ;;
 esac
+
+acquire_benchmark_run_lock
+trap release_benchmark_run_lock EXIT HUP INT TERM
 
 if [ -e "$result_dir" ]; then
     echo "A/B result directory already exists: $result_dir" >&2

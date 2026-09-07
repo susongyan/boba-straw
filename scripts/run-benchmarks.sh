@@ -6,6 +6,8 @@
 #
 set -eu
 
+. ./scripts/benchmark-run-lock.sh
+
 profile=${1:-smoke}
 target=${2:-all}
 run_id=$(date -u +%Y%m%dT%H%M%SZ)
@@ -40,6 +42,9 @@ case "$target" in
         exit 2
         ;;
 esac
+
+acquire_benchmark_run_lock
+trap release_benchmark_run_lock EXIT HUP INT TERM
 
 require_full_container() {
     container_name=$1
@@ -338,7 +343,7 @@ run_observation() {
         -rf json -rff "$result_file" \
         >"$log_file" 2>&1 &
     observation_pid=$!
-    trap stop_observation HUP INT TERM EXIT
+    trap 'stop_observation; release_benchmark_run_lock' HUP INT TERM EXIT
 
     while kill -0 "$observation_pid" >/dev/null 2>&1; do
         sample_client_and_server "$observation_pid" "$container_name" "$samples_file"
@@ -348,7 +353,7 @@ run_observation() {
     observation_status=0
     wait "$observation_pid" || observation_status=$?
     observation_pid=
-    trap - HUP INT TERM EXIT
+    trap release_benchmark_run_lock HUP INT TERM EXIT
     if [ "$observation_status" -ne 0 ]; then
         tail -100 "$log_file" >&2
         return "$observation_status"
