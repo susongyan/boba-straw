@@ -112,31 +112,31 @@ try (
 sequenceDiagram
     participant App as 业务线程
     participant Queue as EventLoop task queue
-    participant Loop as NioEventLoop
+    participant Nio as NioEventLoop
     participant Callback as bounded callback dispatcher
     participant Redis as Redis/Valkey
 
     App->>App: 编码不可变命令帧
     App->>App: 预留 connection command / write-byte capacity
     App->>Queue: submit(request)
-    App->>Loop: Selector.wakeup()
-    Loop->>Queue: drain tasks
-    Loop->>Loop: 加入 outbound FIFO
-    Loop->>Redis: gathering write, max 32 frames / 64 KiB
-    Loop->>Loop: 实际写入字节归还 write-byte capacity
-    Loop->>Loop: 仅完整帧从 outbound -> pending
-    Redis-->>Loop: RESP response / Push / Attribute
-    Loop->>Loop: 增量状态机解码、资源校验与响应分类
+    App->>Nio: Selector.wakeup()
+    Nio->>Queue: drain tasks
+    Nio->>Nio: 加入 outbound FIFO
+    Nio->>Redis: gathering write, max 32 frames / 64 KiB
+    Nio->>Nio: 实际写入字节归还 write-byte capacity
+    Nio->>Nio: 完整帧从 outbound 移至 pending
+    Redis-->>Nio: RESP response / Push / Attribute
+    Nio->>Nio: 增量状态机解码、资源校验与响应分类
     alt 普通响应
-        Loop->>Loop: pending 队首匹配并归还 command slot
-        Loop->>Callback: 完成应用 Future
+        Nio->>Nio: pending 队首匹配并归还 command slot
+        Nio->>Callback: 完成应用 Future
         Callback-->>App: complete CompletionStage / continuation
     else RESP3 Push 或 Pub/Sub 消息
-        Loop->>Callback: 每连接串行 listener 分发
+        Nio->>Callback: 每连接串行 listener 分发
         Callback-->>App: 保序执行 listener
     else Attribute + 普通响应
-        Loop->>Loop: 保留 Attribute 并匹配 pending 队首
-        Loop->>Callback: 完成应用 Future
+        Nio->>Nio: 保留 Attribute 并匹配 pending 队首
+        Nio->>Callback: 完成应用 Future
         Callback-->>App: complete CompletionStage / continuation
     end
 ```
