@@ -425,7 +425,9 @@ in-flight/待写字节与本连接背压拒绝计数。
   [`binary result`](../benchmarks/results/20260906-b9ceff7-valkey-binary-large/summary.md)。仍需补系统观测与
   故障注入；完成前阶段 6 保持进行中。
 - `TransportObservationBenchmark` 与 `redis-observe`/`valkey-observe` runner 已提供当前物理连接的
-  socket 次数/字节辅助计数，以及 fork JVM 和容器的系统采样。正式结果未归档前不作为验收完成项。
+  socket 次数/字节辅助计数，以及 fork JVM 和容器的系统采样。Redis 正式结果已归档于
+  [`redis observation`](../benchmarks/results/20260907-9dfa609-redis-observe/summary.md)；Valkey 结果与
+  instrumentation 隔离 A/B 尚未完成。
 
 - 先探测本机 JDK、Colima 与容器运行状况；缺少的 JDK、JMH 构建依赖、Redis / Valkey
   镜像和观测工具可直接安装。环境版本、镜像 digest、CPU 核数、内存、JVM 参数与命令必须

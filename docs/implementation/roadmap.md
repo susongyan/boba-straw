@@ -117,7 +117,10 @@ Redis 7.4.2 全 workload（含 String/`byte[]` 大 value）也已完成，结果
 
 系统观测 instrumentation 已落地：`BobaStrawClientMetrics` 提供当前物理连接的 socket read/write
 次数和字节数，`TransportObservationBenchmark` 与独立 runner 同时采集 JMH 辅助计数、实际 fork JVM
-及 Redis/Valkey 容器资源。正式结果未归档前阶段 6 仍保持进行中。
+及 Redis/Valkey 容器资源。Redis 正式结果见
+[`20260907-9dfa609-redis-observe`](../benchmarks/results/20260907-9dfa609-redis-observe/summary.md)：
+Pipeline 128 精确命中 32 commands/write，已将 gathering frame 上限识别为后续 A/B 候选。
+Valkey 正式观测和 instrumentation 隔离 A/B 未完成前，阶段 6 仍保持进行中。
 
 ### 协议与连接
 
