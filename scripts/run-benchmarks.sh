@@ -13,6 +13,7 @@ output_dir=${3:-benchmark-results/$run_id}
 benchmark_jar=boba-straw-benchmarks/target/benchmarks.jar
 redis_image="redis:7.4.2@sha256:fbdbaea47b9ae4ecc2082ecdb4e1cea81e32176ffb1dcf643d422ad07427e5d9"
 valkey_image="valkey/valkey:8.1.3@sha256:fea8b3e67b15729d4bb70589eb03367bab9ad1ee89c876f54327fc7c6e618571"
+benchmark_host_preflight=not_run
 
 case "$profile" in
     smoke)
@@ -85,12 +86,18 @@ fi
 if [ "$profile" = "full" ]; then
     case "$target" in
         redis|redis-binary-large|redis-observe)
+            benchmark_host_preflight=$(./scripts/check-benchmark-host.sh)
+            printf '%s\n' "$benchmark_host_preflight"
             require_full_container boba-straw-benchmark-redis 17379 "$redis_image"
             ;;
         valkey|valkey-binary-large|valkey-observe)
+            benchmark_host_preflight=$(./scripts/check-benchmark-host.sh)
+            printf '%s\n' "$benchmark_host_preflight"
             require_full_container boba-straw-benchmark-valkey 17380 "$valkey_image"
             ;;
         all)
+            benchmark_host_preflight=$(./scripts/check-benchmark-host.sh)
+            printf '%s\n' "$benchmark_host_preflight"
             require_full_container boba-straw-benchmark-redis 17379 "$redis_image"
             require_full_container boba-straw-benchmark-valkey 17380 "$valkey_image"
             ;;
@@ -141,6 +148,9 @@ mkdir "$output_dir"
     echo "jmh_version=1.37"
     echo "jmh_common_options=$common_options"
     echo "jmh_profiler_options=$profiler_options"
+    echo "benchmark_host_preflight_begin"
+    printf '%s\n' "$benchmark_host_preflight"
+    echo "benchmark_host_preflight_end"
 } >"$output_dir/environment.txt" 2>&1
 
 {

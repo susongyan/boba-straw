@@ -15,19 +15,20 @@ require_expected_container() {
     expected_command=$4
 
     actual_image_id=$(docker container inspect --format '{{.Image}}' "$container_name")
-    actual_port=$(docker port "$container_name" 6379/tcp)
+    actual_port_binding=$(docker container inspect --format \
+        '{{json (index .HostConfig.PortBindings "6379/tcp")}}' "$container_name")
     actual_cpus=$(docker container inspect --format '{{.HostConfig.NanoCpus}}' "$container_name")
     actual_memory=$(docker container inspect --format '{{.HostConfig.Memory}}' "$container_name")
     actual_command=$(docker container inspect --format '{{json .Config.Cmd}}' "$container_name")
 
     if [ "$actual_image_id" != "$expected_image_id" ] \
-        || [ "$actual_port" != "127.0.0.1:$host_port" ] \
+        || [ "$actual_port_binding" != "[{\"HostIp\":\"127.0.0.1\",\"HostPort\":\"$host_port\"}]" ] \
         || [ "$actual_cpus" != "2000000000" ] \
         || [ "$actual_memory" != "2147483648" ] \
         || [ "$actual_command" != "$expected_command" ]; then
         echo "$container_name exists with a different benchmark configuration." >&2
         echo "Run ./scripts/benchmark-down.sh, then start the environment again." >&2
-        echo "actual: image=$actual_image_id port=$actual_port cpus=$actual_cpus memory=$actual_memory command=$actual_command" >&2
+        echo "actual: image=$actual_image_id portBinding=$actual_port_binding cpus=$actual_cpus memory=$actual_memory command=$actual_command" >&2
         exit 2
     fi
 }

@@ -90,6 +90,10 @@ allocation rate、GC，以及 Pipeline 换算后的 commands/s。JMH 自带的 f
 环境清单仍会记录当时的工作区状态。runner 每次先执行 `clean package`，并记录 core 与 shaded
 benchmark JAR 的 SHA-256。
 
+正式网络基准还要求宿主 1 分钟 load average / logical CPU 不超过 `1.50`，避免在 CPU 已饱和时
+归档不可比较结果。可通过 `BOBA_BENCHMARK_MAX_LOAD_PER_CPU` 收紧阈值；设为 `0` 只适用于明确
+标记为不可比较的诊断 run。`smoke` 不受此门禁限制。
+
 系统观测使用独立 target，避免把 `docker stats` 与 `ps` 采样开销混入正式吞吐/延迟基线：
 
 ```bash
@@ -158,6 +162,16 @@ SNAPSHOT，也不切换当前工作区：
 ./scripts/run-ab-benchmarks.sh \
   full redis-critical benchmark-results/ab-redis-critical \
   ca078f4 <candidate-ref> <harness-ref>
+```
+
+隔离 socket 观测计数器自身开销时，使用更窄的 `redis-transport-overhead` target。基线应选择加入
+计数器前的提交，候选选择加入计数器后的提交，harness 也使用计数器前的提交，以保证它只能引用
+两侧共有 API；workload 只包含 Async window 1024 与 Pipeline 128 的吞吐和 GC allocation：
+
+```bash
+./scripts/run-ab-benchmarks.sh \
+  full redis-transport-overhead benchmark-results/ab-transport-overhead \
+  c4d9898 9dfa609 c4d9898
 ```
 
 每个序列使用独立 JVM/JMH fork 和独立 JSON。汇总时按 benchmark、参数和 mode 对齐，吞吐报告

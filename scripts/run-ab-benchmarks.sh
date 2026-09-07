@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 #
 # Runs the same thin JMH harness against baseline and candidate Core JARs in ABBA order.
-# Usage: run-ab-benchmarks.sh <smoke|full> <redis|redis-critical|redis-binary-large|valkey|valkey-binary-large|codec|all> <result-dir> [baseline-ref] [candidate-ref] [harness-ref]
+# Usage: run-ab-benchmarks.sh <smoke|full> <redis|redis-critical|redis-transport-overhead|redis-binary-large|valkey|valkey-binary-large|codec|all> <result-dir> [baseline-ref] [candidate-ref] [harness-ref]
 #
 set -eu
 
@@ -12,6 +12,7 @@ result_dir=${3:-benchmark-results/ab-$run_id}
 baseline_ref=${4:-ca078f4}
 candidate_ref=${5:-HEAD}
 harness_ref=${6:-HEAD}
+benchmark_host_preflight=not_run
 
 case "$profile" in
     smoke)
@@ -29,11 +30,12 @@ case "$profile" in
 esac
 
 case "$target" in
-    redis|redis-critical|redis-binary-large|valkey|valkey-binary-large|codec|all)
+    redis|redis-critical|redis-transport-overhead|redis-binary-large|valkey|valkey-binary-large|codec|all)
         ;;
     *)
         echo "Unknown target: $target" >&2
-        echo "Expected redis, redis-critical, redis-binary-large, valkey," >&2
+        echo "Expected redis, redis-critical, redis-transport-overhead," >&2
+        echo "redis-binary-large, valkey," >&2
         echo "valkey-binary-large, codec, or all." >&2
         exit 2
         ;;
@@ -45,7 +47,11 @@ if [ -e "$result_dir" ]; then
 fi
 
 case "$target" in
-    redis|redis-critical|redis-binary-large|valkey|valkey-binary-large|all)
+    redis|redis-critical|redis-transport-overhead|redis-binary-large|valkey|valkey-binary-large|all)
+        if [ "$profile" = "full" ]; then
+            benchmark_host_preflight=$(./scripts/check-benchmark-host.sh)
+            printf '%s\n' "$benchmark_host_preflight"
+        fi
         ./scripts/benchmark-up.sh
         ;;
 esac
@@ -68,6 +74,9 @@ candidate_core=$artifact_dir/candidate-core.jar
     echo "target=$target"
     echo "jmh_common_options=$common_options"
     echo "jmh_profiler_options=$profiler_options"
+    echo "benchmark_host_preflight_begin"
+    printf '%s\n' "$benchmark_host_preflight"
+    echo "benchmark_host_preflight_end"
     uname -a
     if command -v colima >/dev/null 2>&1; then
         echo "colima_status_begin"
@@ -189,6 +198,25 @@ run_critical_network() {
     fi
 }
 
+run_transport_overhead() {
+    core_jar=$1
+    destination=$2
+    endpoint=redis://127.0.0.1:17379
+
+    throughput_log=$destination/redis-transport-overhead.log
+    echo "Running $destination Redis transport instrumentation overhead"
+    if ! java -cp "$core_jar:$harness_jar" org.openjdk.jmh.Main \
+        '.*(AsyncWindowBenchmark.asyncGetWindow1024|RedisBatchBenchmark.pipeline128).*' \
+        -p endpoint="$endpoint" -p protocol=AUTO \
+        $common_options $profiler_options \
+        -bm thrpt -tu s -foe true \
+        -rf json -rff "$destination/redis-transport-overhead.json" \
+        >"$throughput_log" 2>&1; then
+        tail -100 "$throughput_log" >&2
+        return 1
+    fi
+}
+
 run_binary_large() {
     core_jar=$1
     destination=$2
@@ -238,6 +266,9 @@ run_variant() {
             ;;
         redis-critical)
             run_critical_network "$core_jar" "$destination"
+            ;;
+        redis-transport-overhead)
+            run_transport_overhead "$core_jar" "$destination"
             ;;
         redis-binary-large)
             run_binary_large "$core_jar" "$destination" redis-binary-large redis://127.0.0.1:17379
