@@ -120,7 +120,10 @@ Redis 7.4.2 全 workload（含 String/`byte[]` 大 value）也已完成，结果
 及 Redis/Valkey 容器资源。Redis 正式结果见
 [`20260907-9dfa609-redis-observe`](../benchmarks/results/20260907-9dfa609-redis-observe/summary.md)：
 Pipeline 128 精确命中 32 commands/write，已将 gathering frame 上限识别为后续 A/B 候选。
-Valkey 正式观测和 instrumentation 隔离 A/B 未完成前，阶段 6 仍保持进行中。
+Valkey 正式结果见
+[`20260907-9ece1c7-valkey-observe`](../benchmarks/results/20260907-9ece1c7-valkey-observe/summary.md)：
+同样观测到 Pipeline 128 精确命中 32 commands/write。instrumentation 隔离 A/B 与 gathering
+frame 候选优化尚未验收，因此阶段 6 仍保持进行中。
 
 确定性网络故障注入已整理为独立的 `fault-injection` JUnit 标签与
 [`run-fault-injection-tests.sh`](../../scripts/run-fault-injection-tests.sh) 入口。覆盖 RESP 任意分片、

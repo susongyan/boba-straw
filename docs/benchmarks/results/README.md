@@ -12,3 +12,4 @@
 | [`20260906-b9ceff7-valkey-binary-large`](20260906-b9ceff7-valkey-binary-large/summary.md) | Valkey 8.1.3 `byte[]` large-value baseline | completed |
 | [`20260906-9b3f116-redis-full`](20260906-9b3f116-redis-full/summary.md) | Redis 7.4.2 full network baseline | completed |
 | [`20260907-9dfa609-redis-observe`](20260907-9dfa609-redis-observe/summary.md) | Redis 7.4.2 transport and system observation | completed |
+| [`20260907-9ece1c7-valkey-observe`](20260907-9ece1c7-valkey-observe/summary.md) | Valkey 8.1.3 transport and system observation | completed |

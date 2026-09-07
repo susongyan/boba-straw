@@ -422,12 +422,13 @@ in-flight/待写字节与本连接背压拒绝计数。
   [`valkey result`](../benchmarks/results/20260906-0cbf813-valkey-full/summary.md)。两个服务端的
   `byte[]` 大 value 均确认内核约为 1x payload copy，String 的第 2x 主要来自 UTF-8/String 转换；
   Valkey 的独立 binary 结果见
-  [`binary result`](../benchmarks/results/20260906-b9ceff7-valkey-binary-large/summary.md)。仍需补系统观测与
-  故障注入；完成前阶段 6 保持进行中。
+  [`binary result`](../benchmarks/results/20260906-b9ceff7-valkey-binary-large/summary.md)。
 - `TransportObservationBenchmark` 与 `redis-observe`/`valkey-observe` runner 已提供当前物理连接的
   socket 次数/字节辅助计数，以及 fork JVM 和容器的系统采样。Redis 正式结果已归档于
-  [`redis observation`](../benchmarks/results/20260907-9dfa609-redis-observe/summary.md)；Valkey 结果与
-  instrumentation 隔离 A/B 尚未完成。
+  [`redis observation`](../benchmarks/results/20260907-9dfa609-redis-observe/summary.md)，Valkey 正式结果已归档于
+  [`valkey observation`](../benchmarks/results/20260907-9ece1c7-valkey-observe/summary.md)。两者都确认
+  Pipeline 128 精确命中 32 commands/write；instrumentation 隔离 A/B 与 gathering frame 候选优化
+  尚未完成。
 - 确定性网络故障注入通过 `fault-injection` JUnit 标签独立执行，覆盖 wire 分片、部分写预算、
   回复 burst、写后断连、取消/超时 drain、连接隔离、慢 Pub/Sub listener 与退订竞态。矩阵和
   复跑命令见 [`fault-injection`](../testing/fault-injection.md)。
