@@ -396,7 +396,8 @@ in-flight/待写字节与本连接背压拒绝计数。
 - 已写取消/超时请求在 `CANCELLED_DRAINING` 中继续占用 command slot，直到对应回复消费；排队
   取消和超时、断连和正常回复均正确归还 reservation。待写字节仅在实际 socket write 后归还。
 - 共享连接使用 close/ready lifecycle 而非固定轮询；失败候选按 capped exponential backoff 重建。
-  Client 不重放、迁移或隐藏已失败命令，并通过 `BobaStrawClientMetrics` 暴露连接状态与累计指标。
+  Client 不重放、迁移或隐藏已失败命令，并通过 `BobaStrawClientMetrics` 暴露连接状态与累计指标；
+  正字节 socket read/write 次数和字节数描述当前物理连接，replacement 后从零开始。
 - 派生的 String、binary 和 Pub/Sub `CompletionStage` 取消会传播回底层请求；同步 facade 直接等待
   transport completion。UNSUBSCRIBE ACK 后立即释放专用连接的 socket/Selector；Pub/Sub 串行 callback
   barrier 继续先交付 ACK 前已经解码的消息，再关闭 callback stream，不让慢 listener 持有物理连接。
@@ -423,6 +424,8 @@ in-flight/待写字节与本连接背压拒绝计数。
   Valkey 的独立 binary 结果见
   [`binary result`](../benchmarks/results/20260906-b9ceff7-valkey-binary-large/summary.md)。仍需补系统观测与
   故障注入；完成前阶段 6 保持进行中。
+- `TransportObservationBenchmark` 与 `redis-observe`/`valkey-observe` runner 已提供当前物理连接的
+  socket 次数/字节辅助计数，以及 fork JVM 和容器的系统采样。正式结果未归档前不作为验收完成项。
 
 - 先探测本机 JDK、Colima 与容器运行状况；缺少的 JDK、JMH 构建依赖、Redis / Valkey
   镜像和观测工具可直接安装。环境版本、镜像 digest、CPU 核数、内存、JVM 参数与命令必须

@@ -53,6 +53,12 @@ class BobaStrawConnectionLifecycleTest {
             assertTrue(server.awaitCommand(1));
             server.allowReply(1);
             assertEquals("PONG", afterDrain.get(2, TimeUnit.SECONDS));
+
+            BobaStrawClientMetrics metrics = client.metrics();
+            assertTrue(metrics.socketReadOperations() > 0L);
+            assertTrue(metrics.socketBytesRead() >= metrics.socketReadOperations());
+            assertTrue(metrics.socketWriteOperations() > 0L);
+            assertTrue(metrics.socketBytesWritten() >= metrics.socketWriteOperations());
         }
 
         assertTrue(server.awaitCompletion());

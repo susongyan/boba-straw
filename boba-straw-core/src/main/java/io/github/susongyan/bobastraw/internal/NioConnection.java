@@ -51,6 +51,10 @@ public final class NioConnection implements AutoCloseable {
     private final ByteBuffer[] writeBuffers;
     private final Request[] writeRequests;
     private final int[] writePositions;
+    private volatile long socketReadOperations;
+    private volatile long socketBytesRead;
+    private volatile long socketWriteOperations;
+    private volatile long socketBytesWritten;
 
     private volatile boolean closed;
     private volatile boolean closeRequested;
@@ -581,6 +585,26 @@ public final class NioConnection implements AutoCloseable {
         return capacity.rejections();
     }
 
+    /** Successful positive-byte {@link SocketChannel#read(ByteBuffer)} calls on this connection. */
+    public long socketReadOperations() {
+        return socketReadOperations;
+    }
+
+    /** Bytes returned by successful positive-byte socket reads on this connection. */
+    public long socketBytesRead() {
+        return socketBytesRead;
+    }
+
+    /** Successful positive-byte gathering writes on this connection. */
+    public long socketWriteOperations() {
+        return socketWriteOperations;
+    }
+
+    /** Bytes accepted by successful positive-byte socket writes on this connection. */
+    public long socketBytesWritten() {
+        return socketBytesWritten;
+    }
+
     public Duration idlePingInterval() {
         return idlePingInterval;
     }
@@ -1061,6 +1085,8 @@ public final class NioConnection implements AutoCloseable {
             }
         }
         if (written > 0L) {
+            socketWriteOperations++;
+            socketBytesWritten += written;
             lastActivityNanos = System.nanoTime();
         }
 
@@ -1093,6 +1119,8 @@ public final class NioConnection implements AutoCloseable {
             if (count == 0) {
                 return;
             }
+            socketReadOperations++;
+            socketBytesRead += count;
             lastActivityNanos = System.nanoTime();
             remainingReadBytes -= count;
             processInbound(readBuffer.array(), count);

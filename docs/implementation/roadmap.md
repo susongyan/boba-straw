@@ -115,6 +115,10 @@ Redis 7.4.2 全 workload（含 String/`byte[]` 大 value）也已完成，结果
 客户端/server CPU、线程数、socket I/O 等系统观测，并执行碎片响应、连接中断、慢消费者等故障注入；
 环境、命令、原始结果和结论统一保存至 `docs/benchmarks/`。
 
+系统观测 instrumentation 已落地：`BobaStrawClientMetrics` 提供当前物理连接的 socket read/write
+次数和字节数，`TransportObservationBenchmark` 与独立 runner 同时采集 JMH 辅助计数、实际 fork JVM
+及 Redis/Valkey 容器资源。正式结果未归档前阶段 6 仍保持进行中。
+
 ### 协议与连接
 
 - [x] RESP2 Simple String、Error、Integer、Bulk、Array

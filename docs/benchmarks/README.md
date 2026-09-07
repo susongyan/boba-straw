@@ -14,6 +14,7 @@
 | `RedisBinaryLargeValueBenchmark` | 同尺寸 `byte[]` GET/SET，用于拆分协议复制与 String Codec 转换成本 |
 | `SharedEventLoopFairnessBenchmark` | 共享 EventLoop 时繁忙 Pipeline 对健康连接尾延迟的影响，并记录每个测量周期的 noisy commands |
 | `SlowCallbackIsolationBenchmark` | 5 ms 慢用户回调对同 EventLoop 健康连接尾延迟的影响，并记录每个测量周期的 noisy completions |
+| `TransportObservationBenchmark` | Async window 1024 与 Pipeline 128 的 socket read/write 次数、字节数及系统资源采样 |
 | `RespCodecBenchmark` | 编码、Bulk、RESP3 aggregate、128 回复 burst 和逐字节碎片解析 |
 
 Pipeline 方法使用 JMH `@OperationsPerInvocation`，所以吞吐结果已经换算为 Redis commands/s，
@@ -88,6 +89,17 @@ allocation rate、GC，以及 Pipeline 换算后的 commands/s。JMH 自带的 f
 只有在保存试验性结果且明确接受不可复现风险时，才可设置 `BOBA_BENCHMARK_ALLOW_DIRTY=1`；
 环境清单仍会记录当时的工作区状态。runner 每次先执行 `clean package`，并记录 core 与 shaded
 benchmark JAR 的 SHA-256。
+
+系统观测使用独立 target，避免把 `docker stats` 与 `ps` 采样开销混入正式吞吐/延迟基线：
+
+```bash
+./scripts/run-benchmarks.sh full redis-observe benchmark-results/redis-observe
+./scripts/run-benchmarks.sh full valkey-observe benchmark-results/valkey-observe
+```
+
+JMH JSON 的辅助计数包含每轮 `commands`、正字节 `SocketChannel.read`/gathering write 次数和字节数；
+`*-system-samples.tsv` 同时记录实际 fork JVM 的 CPU、RSS、线程数，以及容器 CPU、内存、PID 和
+`eth0` 精确 RX/TX byte counter。指标属于专用容量观测，不能与未采样的吞吐 run 直接比较高低。
 
 runner 不允许复用已经存在的结果目录，避免第二次执行覆盖原始 JSON 或环境清单。重跑时应使用
 新的 `<run-id>`；若旧结果确认无用，应由操作者显式归档或删除，而不是由脚本代为清理。

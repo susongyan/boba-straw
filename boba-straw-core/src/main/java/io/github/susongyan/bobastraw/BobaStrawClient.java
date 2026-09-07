@@ -154,7 +154,11 @@ public final class BobaStrawClient implements AutoCloseable {
             state == BobaStrawConnectionState.BACKING_OFF ? nextReconnectDelay : Duration.ZERO,
             current == null ? 0 : current.inFlightCommands(),
             current == null ? 0L : current.queuedWriteBytes(),
-            current == null ? 0L : current.connectionBackpressureRejections()
+            current == null ? 0L : current.connectionBackpressureRejections(),
+            current == null ? 0L : current.socketReadOperations(),
+            current == null ? 0L : current.socketBytesRead(),
+            current == null ? 0L : current.socketWriteOperations(),
+            current == null ? 0L : current.socketBytesWritten()
         );
     }
 

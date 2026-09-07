@@ -24,7 +24,8 @@ EventLoop task 前取得很短的 reservation，协议队列和写入进度仍�
 Standalone 共享连接的 `CONNECTING -> READY -> BACKING_OFF -> CONNECTING` lifecycle 由连接
 close/ready 事件驱动。失败候选按 `reconnectInterval` 至 `reconnectMaxInterval` 的 capped
 exponential backoff 重建；BACKING_OFF 中的新调用明确以“未发送”失败。重连永不迁移、重放或
-掩盖已失败命令，`BobaStrawClientMetrics` 只提供无网络 I/O 的观测快照。
+掩盖已失败命令，`BobaStrawClientMetrics` 只提供无网络 I/O 的观测快照。socket read/write 指标
+描述当前共享物理连接并在 replacement 后归零，避免把不同连接的系统调用混成一个累计值。
 
 网络线程、连接状态所有权、取消语义和性能演进见
 [`network-model.md`](network-model.md)。该文档规定连接内状态最终由所属 EventLoop

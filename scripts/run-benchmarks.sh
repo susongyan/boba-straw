@@ -1,6 +1,8 @@
 #!/usr/bin/env sh
 #
-# Usage: ./scripts/run-benchmarks.sh [smoke|full] [redis|redis-binary-large|valkey|valkey-binary-large|codec|all] [output-dir]
+# Usage: ./scripts/run-benchmarks.sh [smoke|full] [target] [output-dir]
+# Targets: redis, redis-binary-large, redis-observe, valkey, valkey-binary-large,
+#          valkey-observe, codec, all
 #
 set -eu
 
@@ -28,11 +30,12 @@ case "$profile" in
 esac
 
 case "$target" in
-    redis|redis-binary-large|valkey|valkey-binary-large|codec|all)
+    redis|redis-binary-large|redis-observe|valkey|valkey-binary-large|valkey-observe|codec|all)
         ;;
     *)
         echo "Unknown target: $target" >&2
-        echo "Expected redis, redis-binary-large, valkey, valkey-binary-large, codec, or all." >&2
+        echo "Expected redis, redis-binary-large, redis-observe, valkey," >&2
+        echo "valkey-binary-large, valkey-observe, codec, or all." >&2
         exit 2
         ;;
 esac
@@ -81,10 +84,10 @@ fi
 
 if [ "$profile" = "full" ]; then
     case "$target" in
-        redis|redis-binary-large)
+        redis|redis-binary-large|redis-observe)
             require_full_container boba-straw-benchmark-redis 17379 "$redis_image"
             ;;
-        valkey|valkey-binary-large)
+        valkey|valkey-binary-large|valkey-observe)
             require_full_container boba-straw-benchmark-valkey 17380 "$valkey_image"
             ;;
         all)
@@ -260,6 +263,101 @@ run_binary_large() {
     fi
 }
 
+sample_client_and_server() {
+    launcher_pid=$1
+    container_name=$2
+    samples_file=$3
+
+    client_pid=$launcher_pid
+    if command -v pgrep >/dev/null 2>&1; then
+        child_pid=$(pgrep -P "$launcher_pid" 2>/dev/null | head -n 1 || true)
+        if [ -n "$child_pid" ]; then
+            client_pid=$child_pid
+        fi
+    fi
+
+    client_cpu_rss=$(ps -o pcpu= -o rss= -p "$client_pid" 2>/dev/null \
+        | awk 'NR == 1 { print $1 "\t" $2 }')
+    if [ "$(uname -s)" = "Darwin" ]; then
+        client_threads=$(ps -M -p "$client_pid" 2>/dev/null \
+            | awk 'NR > 1 { count++ } END { print count + 0 }')
+    elif ps -o nlwp= -p "$client_pid" >/dev/null 2>&1; then
+        client_threads=$(ps -o nlwp= -p "$client_pid" | awk 'NR == 1 { print $1 }')
+    else
+        client_threads=NA
+    fi
+    if [ -z "$client_cpu_rss" ]; then
+        client_stats=$(printf 'NA\tNA\tNA')
+    else
+        client_stats=$(printf '%s\t%s' "$client_cpu_rss" "$client_threads")
+    fi
+
+    server_stats=$(docker stats --no-stream \
+        --format '{{.CPUPerc}}\t{{.MemUsage}}\t{{.PIDs}}' \
+        "$container_name" 2>/dev/null || true)
+    if [ -z "$server_stats" ]; then
+        server_stats=$(printf 'NA\tNA\tNA')
+    fi
+    server_network=$(docker exec "$container_name" cat /proc/1/net/dev 2>/dev/null \
+        | awk '$1 ~ /eth0:/ { print $2 "\t" $10 }')
+    if [ -z "$server_network" ]; then
+        server_network=$(printf 'NA\tNA')
+    fi
+
+    printf '%s\t%s\t%s\t%s\t%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+        "$client_pid" "$client_stats" "$server_stats" "$server_network" >>"$samples_file"
+}
+
+run_observation() {
+    label=$1
+    endpoint=$2
+    container_name=$3
+
+    log_file=$output_dir/$label-observation.log
+    result_file=$output_dir/$label-observation.json
+    samples_file=$output_dir/$label-system-samples.tsv
+    printf 'timestamp_utc\tclient_pid\tclient_cpu_percent\tclient_rss_kib\tclient_threads\tserver_cpu_percent\tserver_memory_usage\tserver_pids\tserver_network_rx_bytes\tserver_network_tx_bytes\n' \
+        >"$samples_file"
+
+    echo "Running $label transport and system observation"
+    java -jar "$benchmark_jar" \
+        '.*TransportObservationBenchmark.*' \
+        -p endpoint="$endpoint" -p protocol=AUTO \
+        $common_options $profiler_options \
+        -bm thrpt -tu s -foe true \
+        -rf json -rff "$result_file" \
+        >"$log_file" 2>&1 &
+    observation_pid=$!
+    trap stop_observation HUP INT TERM EXIT
+
+    while kill -0 "$observation_pid" >/dev/null 2>&1; do
+        sample_client_and_server "$observation_pid" "$container_name" "$samples_file"
+        sleep 1
+    done
+
+    observation_status=0
+    wait "$observation_pid" || observation_status=$?
+    observation_pid=
+    trap - HUP INT TERM EXIT
+    if [ "$observation_status" -ne 0 ]; then
+        tail -100 "$log_file" >&2
+        return "$observation_status"
+    fi
+}
+
+stop_observation() {
+    if [ -z "${observation_pid:-}" ]; then
+        return
+    fi
+    if command -v pgrep >/dev/null 2>&1; then
+        observation_children=$(pgrep -P "$observation_pid" 2>/dev/null || true)
+        for observation_child in $observation_children; do
+            kill "$observation_child" >/dev/null 2>&1 || true
+        done
+    fi
+    kill "$observation_pid" >/dev/null 2>&1 || true
+}
+
 case "$target" in
     codec)
         run_codec
@@ -270,11 +368,17 @@ case "$target" in
     redis-binary-large)
         run_binary_large redis-binary-large redis://127.0.0.1:17379
         ;;
+    redis-observe)
+        run_observation redis redis://127.0.0.1:17379 boba-straw-benchmark-redis
+        ;;
     valkey)
         run_network valkey redis://127.0.0.1:17380
         ;;
     valkey-binary-large)
         run_binary_large valkey-binary-large redis://127.0.0.1:17380
+        ;;
+    valkey-observe)
+        run_observation valkey redis://127.0.0.1:17380 boba-straw-benchmark-valkey
         ;;
     all)
         run_codec
