@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 #
 # Runs the same thin JMH harness against baseline and candidate Core JARs in ABBA order.
-# Usage: run-ab-benchmarks.sh <smoke|full> <redis|redis-critical|redis-transport-overhead|redis-binary-large|valkey|valkey-binary-large|codec|all> <result-dir> [baseline-ref] [candidate-ref] [harness-ref]
+# Usage: run-ab-benchmarks.sh <smoke|full> <redis|redis-critical|redis-transport-overhead|redis-gathering-write|redis-binary-large|valkey|valkey-binary-large|codec|all> <result-dir> [baseline-ref] [candidate-ref] [harness-ref]
 #
 set -eu
 
@@ -32,12 +32,12 @@ case "$profile" in
 esac
 
 case "$target" in
-    redis|redis-critical|redis-transport-overhead|redis-binary-large|valkey|valkey-binary-large|codec|all)
+    redis|redis-critical|redis-transport-overhead|redis-gathering-write|redis-binary-large|valkey|valkey-binary-large|codec|all)
         ;;
     *)
         echo "Unknown target: $target" >&2
         echo "Expected redis, redis-critical, redis-transport-overhead," >&2
-        echo "redis-binary-large, valkey," >&2
+        echo "redis-gathering-write, redis-binary-large, valkey," >&2
         echo "valkey-binary-large, codec, or all." >&2
         exit 2
         ;;
@@ -52,7 +52,7 @@ if [ -e "$result_dir" ]; then
 fi
 
 case "$target" in
-    redis|redis-critical|redis-transport-overhead|redis-binary-large|valkey|valkey-binary-large|all)
+    redis|redis-critical|redis-transport-overhead|redis-gathering-write|redis-binary-large|valkey|valkey-binary-large|all)
         if [ "$profile" = "full" ]; then
             benchmark_host_preflight=$(./scripts/check-benchmark-host.sh)
             printf '%s\n' "$benchmark_host_preflight"
@@ -222,6 +222,38 @@ run_transport_overhead() {
     fi
 }
 
+run_gathering_write() {
+    core_jar=$1
+    destination=$2
+    endpoint=redis://127.0.0.1:17379
+
+    throughput_log=$destination/redis-gathering-write-throughput.log
+    echo "Running $destination Redis gathering-write throughput"
+    if ! java -cp "$core_jar:$harness_jar" org.openjdk.jmh.Main \
+        '.*(AsyncWindowBenchmark.asyncGetWindow1024|RedisBatchBenchmark.pipeline128).*' \
+        -p endpoint="$endpoint" -p protocol=AUTO \
+        $common_options $profiler_options \
+        -bm thrpt -tu s -foe true \
+        -rf json -rff "$destination/redis-gathering-write-throughput.json" \
+        >"$throughput_log" 2>&1; then
+        tail -100 "$throughput_log" >&2
+        return 1
+    fi
+
+    fairness_log=$destination/redis-gathering-write-fairness.log
+    echo "Running $destination Redis gathering-write fairness"
+    if ! java -cp "$core_jar:$harness_jar" org.openjdk.jmh.Main \
+        '.*SharedEventLoopFairnessBenchmark.*' \
+        -p endpoint="$endpoint" -p protocol=AUTO \
+        $common_options $profiler_options \
+        -bm sample -tu us -foe true \
+        -rf json -rff "$destination/redis-gathering-write-fairness.json" \
+        >"$fairness_log" 2>&1; then
+        tail -100 "$fairness_log" >&2
+        return 1
+    fi
+}
+
 run_binary_large() {
     core_jar=$1
     destination=$2
@@ -274,6 +306,9 @@ run_variant() {
             ;;
         redis-transport-overhead)
             run_transport_overhead "$core_jar" "$destination"
+            ;;
+        redis-gathering-write)
+            run_gathering_write "$core_jar" "$destination"
             ;;
         redis-binary-large)
             run_binary_large "$core_jar" "$destination" redis-binary-large redis://127.0.0.1:17379

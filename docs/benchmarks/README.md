@@ -180,6 +180,16 @@ SNAPSHOT，也不切换当前工作区：
 `candidate / baseline`，延迟与分配报告 `baseline / candidate`，并同时给出两组配对比值与离散度，
 不能只选一次对候选最有利的结果。
 
+校准 gathering frame 上限时使用 `redis-gathering-write`。吞吐侧固定为 Async window 1024 与
+Pipeline 128，公平性侧固定为多 Client 共享 EventLoop 的 noisy Pipeline 场景；这样不会把同步
+GET 或慢 callback 等无关变量混入本次结论：
+
+```bash
+./scripts/run-ab-benchmarks.sh \
+  full redis-gathering-write benchmark-results/ab-gathering-write \
+  <before-ref> <candidate-ref> <shared-harness-ref>
+```
+
 正式结果完成前，阶段 6 仍属于进行中；一次 smoke run 只能证明 runner 和真实网络路径可执行。
 
 协议与生命周期故障不依赖概率性网络扰动，使用独立的确定性 socket 套件验收：
