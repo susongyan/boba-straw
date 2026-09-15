@@ -31,7 +31,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 @Tag("fault-injection")
 class NioConnectionIoTest {
     @Test
-    void defaultGatheringLimitWritesPipeline128InOneSocketOperation() throws Exception {
+    void defaultGatheringLimitSplitsPipeline128AcrossWriteSlices() throws Exception {
         final int commandCount = 128;
         CommandServer server = new CommandServer(commandCount, repeatedPongsText(commandCount));
         server.start();
@@ -51,7 +51,7 @@ class NioConnectionIoTest {
             for (RespValue response : responses) {
                 assertEquals("PONG", response.asString());
             }
-            assertEquals(1L, connection.socketWriteOperations());
+            assertTrue(connection.socketWriteOperations() >= 2L);
         } finally {
             connection.close();
             eventLoops.close();

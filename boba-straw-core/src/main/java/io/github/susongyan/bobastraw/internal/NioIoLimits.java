@@ -11,7 +11,7 @@ final class NioIoLimits {
     static final NioIoLimits DEFAULT = new NioIoLimits(
         16 * 1024,
         64 * 1024,
-        128,
+        64,
         64 * 1024,
         64,
         256
