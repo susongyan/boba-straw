@@ -15,3 +15,4 @@
 | [`20260907-9ece1c7-valkey-observe`](20260907-9ece1c7-valkey-observe/summary.md) | Valkey 8.1.3 transport and system observation | completed |
 | [`20260907-c4d9898-vs-9dfa609-transport-overhead`](20260907-c4d9898-vs-9dfa609-transport-overhead/summary.md) | Socket instrumentation Redis ABBA | completed; no distinguishable material overhead |
 | [`20260908-b9de0a0-vs-0f3506a-gathering-write-128`](20260908-b9de0a0-vs-0f3506a-gathering-write-128/summary.md) | Gathering write 32 vs 128 Redis ABBA | completed; 128 rejected on fairness |
+| [`20260915-b9de0a0-vs-2214adb-gathering-write-64`](20260915-b9de0a0-vs-2214adb-gathering-write-64/summary.md) | Gathering write 32 vs 64 Redis ABBA | completed; 64 adopted |

@@ -190,7 +190,9 @@ GET 或慢 callback 等无关变量混入本次结论：
   <before-ref> <candidate-ref> <shared-harness-ref>
 ```
 
-正式结果完成前，阶段 6 仍属于进行中；一次 smoke run 只能证明 runner 和真实网络路径可执行。
+阶段 6 已于 2026-09-15 完成本轮正式验收，最终采用 64 frames / 64 KiB，结果见
+[`64-frame ABBA`](results/20260915-b9de0a0-vs-2214adb-gathering-write-64/summary.md)。
+一次 smoke run 只能证明 runner 和真实网络路径可执行，不能替代正式性能结果。
 
 协议与生命周期故障不依赖概率性网络扰动，使用独立的确定性 socket 套件验收：
 

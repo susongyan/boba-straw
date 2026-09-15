@@ -194,8 +194,8 @@ EventLoop 单轮服务切片固定为：最多执行 256 个跨线程任务，�
 这些数值由 package-private `NioIoLimits` 管理，暂不暴露为业务配置；它们是公平性保护，
 不是吞吐调优承诺。阶段 6 根据 Redis/Valkey 的 socket observation 把 frame 上限从 32 提高为
 128 候选值，同时保留 64 KiB 字节预算；正式 ABBA 虽确认明显吞吐收益，但 shared EventLoop
-公平性观测不满足验收且存在时间漂移，因此暂不采用 128。当前候选 64 已通过功能回归，仍需
-相同 ABBA 验收后才视为最终校准结果。
+公平性观测不满足验收且存在时间漂移，因此暂不采用 128。64 已通过功能回归和正式 ABBA，
+最终采用 64 frames / 64 KiB；实验环境与结果边界见下方阶段 6 验收。
 
 ```mermaid
 graph TD
@@ -409,7 +409,7 @@ in-flight/待写字节与本连接背压拒绝计数。
   reconnect；`BobaStrawClientResourcesTest` 覆盖同步 API 不受阻塞 callback 影响及派生 Future 取消；
   `BobaStrawProtocolNegotiationTest` 覆盖退订 barrier。完整 `mvn test` 已回归。
 
-### 阶段 6 性能验收（进行中）
+### 阶段 6 性能验收（已完成，2026-09-15）
 
 - Redis critical 正式 ABBA 已完成：阶段 2 基线 `ca078f4` 与候选 `7a2fe41` 使用同一份、在
   baseline API 上编译的 harness，按 A/B/B/A 顺序运行。异步窗口吞吐改善 2.30 倍、Pipeline
@@ -435,7 +435,11 @@ in-flight/待写字节与本连接背压拒绝计数。
   [`instrumentation ABBA`](../benchmarks/results/20260907-c4d9898-vs-9dfa609-transport-overhead/summary.md)。
   128-frame 候选的吞吐明显提升，但 shared EventLoop 公平性退化，已按
   [`gathering-write ABBA`](../benchmarks/results/20260908-b9de0a0-vs-0f3506a-gathering-write-128/summary.md)
-  拒绝；64-frame 候选尚未完成验收。
+  暂不采用。64-frame 正式 ABBA 的健康连接平均/P99 延迟下降约 8.2%/15.4%，繁忙连接
+  完成量提高约 8.0%，Pipeline 吞吐整体持平；最终采用 64 frames / 64 KiB，见
+  [`64-frame ABBA`](../benchmarks/results/20260915-b9de0a0-vs-2214adb-gathering-write-64/summary.md)。
+  Async 吞吐配对方向不一致，不宣称确定收益。参数校准在 Redis 7.4.2、JDK 21、macOS/Colima
+  上完成，Valkey 全量与系统观测属于此前基线；其他 JDK/平台及最终参数的 Valkey A/B 不在本轮结论内。
 - 确定性网络故障注入通过 `fault-injection` JUnit 标签独立执行，覆盖 wire 分片、部分写预算、
   回复 burst、写后断连、取消/超时 drain、连接隔离、慢 Pub/Sub listener 与退订竞态。矩阵和
   复跑命令见 [`fault-injection`](../testing/fault-injection.md)。

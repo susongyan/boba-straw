@@ -39,9 +39,9 @@
 - [x] 阶段 3：读缓冲复用、gathering write 与公平预算
 - [x] 阶段 4：RESP 增量状态机与协议资源上限
 - [x] 阶段 5：统一 deadline、背压、回调、订阅分发隔离与连接 lifecycle
-- [~] 阶段 6：JMH harness、隔离 Core 的 ABBA runner、Redis critical 与 Codec 正式 A/B 已落地；
+- [x] 阶段 6：JMH harness、隔离 Core 的 ABBA runner、Redis critical 与 Codec 正式 A/B 已落地；
   精确尺寸 RESP 编码优化已通过正式 ABBA，Redis 与 Valkey 全 workload/`byte[]` 大 value、系统观测、
-  instrumentation 隔离 A/B 和确定性故障注入已完成；128 候选未获采用，64 候选通过功能回归，等待正式 A/B
+  instrumentation 隔离 A/B 和确定性故障注入已完成；128 未采用，64 通过功能回归及正式 ABBA，最终采用 64 帧 / 64 KiB
 
 验收原则：普通命令无需业务配置连接池大小；连接池只服务于状态型场景。
 
@@ -111,7 +111,7 @@ Valkey 8.1.3 全网络基线也已完成，结果见
 确认额外一份 payload 来自 String/UTF-8 转换，结果见
 [`20260906-b9ceff7-valkey-binary-large`](../benchmarks/results/20260906-b9ceff7-valkey-binary-large/summary.md)。
 Redis 7.4.2 全 workload（含 String/`byte[]` 大 value）也已完成，结果见
-[`20260906-9b3f116-redis-full`](../benchmarks/results/20260906-9b3f116-redis-full/summary.md)。后续补充
+[`20260906-9b3f116-redis-full`](../benchmarks/results/20260906-9b3f116-redis-full/summary.md)。随后已补充
 客户端/server CPU、线程数、socket I/O 等系统观测，并执行碎片响应、连接中断、慢消费者等故障注入；
 环境、命令、原始结果和结论统一保存至 `docs/benchmarks/`。
 
@@ -125,14 +125,18 @@ Valkey 正式结果见
 同样观测到 Pipeline 128 精确命中 32 commands/write。instrumentation 隔离 ABBA 也已完成，
 未观察到可分辨的实质吞吐或 allocation 回归，结果见
 [`20260907-c4d9898-vs-9dfa609-transport-overhead`](../benchmarks/results/20260907-c4d9898-vs-9dfa609-transport-overhead/summary.md)。
-gathering frame 候选优化尚未验收，因此阶段 6 仍保持进行中。
+gathering frame 参数校准已完成，最终值为 64 frames / 64 KiB。
 
 gathering frame 128 候选保留每连接每轮 64 KiB 写预算，并由 `NioConnectionIoTest` 验证
 Pipeline 128 的一次 gathering write、完整响应与 FIFO。正式 ABBA 显示 Async/Pipeline 吞吐分别
 改善 1.493x/1.441x，但 shared EventLoop healthy GET 平均/P99 延迟恶化约 18.8%/60.0%，因此
 128 被拒绝，结果见
 [`20260908-b9de0a0-vs-0f3506a-gathering-write-128`](../benchmarks/results/20260908-b9de0a0-vs-0f3506a-gathering-write-128/summary.md)。
-下一候选为与响应分发预算一致的 64 frames，正式 ABBA 和完整回归完成前阶段 6 仍保持进行中。
+64 frames 正式 ABBA 已完成：healthy GET 平均/P99 延迟下降约 8.2%/15.4%，noisy 完成量
+提高约 8.0%，Pipeline 吞吐整体持平。最终采用 64 frames / 64 KiB，结果见
+[`64-frame ABBA`](../benchmarks/results/20260915-b9de0a0-vs-2214adb-gathering-write-64/summary.md)。
+阶段 6 在 JDK 21、macOS/Colima 下完成；这不代表整个 v1 客户端或跨 JDK/平台发布矩阵已完成。
+Sentinel、TLS、Cluster 生产化等仍按本文件对应功能条目跟踪。
 
 确定性网络故障注入已整理为独立的 `fault-injection` JUnit 标签与
 [`run-fault-injection-tests.sh`](../../scripts/run-fault-injection-tests.sh) 入口。覆盖 RESP 任意分片、
