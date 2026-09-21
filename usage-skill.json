@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "name": "boba-straw-usage",
+  "version": "0.1.0",
+  "sdk": {
+    "coordinates": "io.github.susongyan:boba-straw-core",
+    "supportedVersions": [
+      "0.1.0-SNAPSHOT"
+    ]
+  },
+  "licenseStatus": "undecided",
+  "publicPublishAllowed": false
+}

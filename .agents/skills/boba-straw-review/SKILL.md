@@ -5,6 +5,10 @@ description: Review Boba Straw changes for protocol correctness, connection life
 
 # Boba Straw review
 
+For Redis command changes, also use the
+[command acceptance checklist](../boba-straw-command-development/references/acceptance-checklist.md).
+Review-only requests do not authorize code changes.
+
 Review changed code for these high-risk failures:
 
 - A Push or Attribute reply consuming a normal pending command.

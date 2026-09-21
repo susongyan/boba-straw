@@ -7,6 +7,9 @@ description: Implement or change Boba Straw Redis client code, especially RESP d
 
 Read `AGENTS.md` and `docs/architecture/decisions.md` before changing protocol or transport code.
 
+For Redis command additions, options, binary APIs, response mapping, or command reviews, read
+[the command development skill](../boba-straw-command-development/SKILL.md) and its applicable references.
+
 - Keep core code compatible with Java 8 and JDK-only at runtime.
 - Model RESP3 additions in the shared value model; do not add a separate parser.
 - Preserve FIFO reply matching. Test byte-by-byte and multi-reply input when changing decoding.

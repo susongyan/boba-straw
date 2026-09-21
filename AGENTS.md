@@ -12,3 +12,11 @@
 - Flag commands that may cross Cluster slots without an explicit, documented policy.
 - Flag resource ownership that can leak a socket, selector, subscription, or thread.
 - Flag direct use of Java APIs introduced after Java 8 in runtime modules.
+
+## Command development
+
+- When adding, extending, or reviewing Redis command implementations, read
+  [.agents/skills/boba-straw-command-development/SKILL.md](.agents/skills/boba-straw-command-development/SKILL.md)
+  and its relevant references. This does not apply to ordinary application-side SDK usage.
+- Human and cross-agent instructions are in
+  [the command extension guide](docs/development/command-extension-guide.md).
