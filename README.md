@@ -9,7 +9,7 @@ Boba Straw is a lightweight, pure Java Redis and Valkey client. It uses a Java N
 维护者使用 AI 扩展 Redis 命令时，见[命令扩展开发指南](docs/development/command-extension-guide.md)
 及仓库内的 [Command Development Skill](.agents/skills/boba-straw-command-development/SKILL.md)。
 
-`0.1.0-SNAPSHOT` provides a standalone NIO client with RESP2/RESP3 negotiation and synchronous/`CompletionStage` APIs. Key and String coverage includes conditional/expiring `SET`, `MGET`/`MSET`, counters, range and bit operations, expiry management, rename and type commands; Hash, List, Set and sorted-set currently provide their basic operations. Pipeline, dedicated transaction/Pub/Sub connections and scripts have basic implementations, but Sentinel, TLS and Cluster production behavior are not yet available.
+`0.1.0-SNAPSHOT` provides a standalone NIO client with RESP2/RESP3 negotiation and synchronous/`CompletionStage` APIs. Key and String coverage includes conditional/expiring `SET`, `MGET`/`MSET`, counters, range and bit operations, expiry management, rename and type commands; Hash, List, Set and sorted-set currently provide their basic operations. Pipeline, dedicated transaction/Pub/Sub connections and scripts have basic implementations. Cluster and Sentinel support ordinary primary commands and topology recovery; their dedicated-command combinations, production endurance validation and TLS remain incomplete.
 
 ```java
 try (BobaStrawClient client = BobaStrawClient.builder().uri("redis://localhost:6379").build()) {
@@ -149,6 +149,10 @@ Cluster 普通命令已有节点退避重连、周期/事件拓扑刷新和同 S
 跟随一次，ASK 使用有界单次专用连接，不改变永久 Slot owner；未知命令必须显式声明全部 Key。
 Cluster 的 Pipeline、事务、阻塞和 Pub/Sub 接口仍待完成，详见
 [Cluster 连接与拓扑](docs/architecture/cluster-topology.md)。
+
+Sentinel 提供独立的 `BobaStrawSentinelClient`：多 Sentinel 发现、两套认证、ROLE 校验、
+周期发现与主节点切换，且不重放失败命令。配置与当前限制见
+[Sentinel 连接与拓扑](docs/architecture/sentinel-topology.md)。
 
 ## Build
 

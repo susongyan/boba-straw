@@ -177,6 +177,14 @@ public final class BobaStrawClient implements AutoCloseable {
         }
     }
 
+    void retireForTopologyChange() {
+        synchronized (this) {
+            closed = true;
+            connection.closeForTopologyChange();
+        }
+        close();
+    }
+
     public CompletionStage<RespValue> executeAsync(String command, String... arguments) {
         return executeOn(sharedConnection(), command, arguments);
     }

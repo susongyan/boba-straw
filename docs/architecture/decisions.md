@@ -46,4 +46,6 @@ exponential backoff 重建；BACKING_OFF 中的新调用明确以“未发送”
 Standalone 已达到基础验收。Cluster 普通主节点命令具有节点退避重连、周期/事件拓扑发现、
 非 seed 旧节点摘除、已知多 Key 同 Slot 校验和单次 MOVED/ASK；ASK 使用单次专用连接，
 不污染共享连接状态和永久 Slot 映射。完整边界见 [cluster-topology.md](cluster-topology.md)。
-这不包含 Cluster 事务/Pipeline/Pub/Sub/阻塞接口，也不等于生产长稳验收。Sentinel 和 TLS 仍未实现。
+这不包含 Cluster 事务/Pipeline/Pub/Sub/阻塞接口，也不等于生产长稳验收。
+Sentinel 普通主节点命令通过独立入口实现：重新发现、同连接 ROLE 校验、两套认证与旧连接退休；
+见 [sentinel-topology.md](sentinel-topology.md)。专用组合留待 C6，TLS 仍未实现。

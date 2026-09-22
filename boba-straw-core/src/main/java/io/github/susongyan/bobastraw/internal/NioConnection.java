@@ -29,6 +29,7 @@ import java.util.function.Consumer;
 
 /** One non-blocking TCP connection with FIFO response matching. */
 public final class NioConnection implements AutoCloseable {
+    private volatile boolean topologyRetirement;
     private final NioEventLoop eventLoop;
     private final NioEventLoopGroup legacyOwnedEventLoops;
     private final NioIoLimits ioLimits;
@@ -769,7 +770,7 @@ public final class NioConnection implements AutoCloseable {
     }
 
     void onEventLoopShutdown(BobaStrawConnectionException error) {
-        failAll(error, false);
+        failAll(error, topologyRetirement);
         closeResources();
     }
 
@@ -1034,7 +1035,7 @@ public final class NioConnection implements AutoCloseable {
                 authenticateResp2();
                 return;
             }
-            close();
+            onIoFailure(error);
         });
     }
 
@@ -1059,7 +1060,7 @@ public final class NioConnection implements AutoCloseable {
             : new String[] { "AUTH", username, password };
         executeConnected(auth).whenComplete((response, error) -> {
             if (error != null) {
-                close();
+                onIoFailure(error);
                 return;
             }
             setClientName();
@@ -1075,7 +1076,7 @@ public final class NioConnection implements AutoCloseable {
             if (error == null) {
                 activateUserCommands();
             } else {
-                close();
+                onIoFailure(error);
             }
         });
     }
@@ -1490,17 +1491,29 @@ public final class NioConnection implements AutoCloseable {
 
     @Override
     public void close() {
+        close(false);
+    }
+
+    /** Retires a topology-owned socket without losing in-flight command delivery semantics. */
+    public void closeForTopologyChange() {
+        close(true);
+    }
+
+    private void close(final boolean classifyCommandDelivery) {
         if (closed || closeRequested) {
             if (drainingPushCallbacks && pushCallbacks != null) {
                 pushCallbacks.close();
             }
             return;
         }
+        topologyRetirement = classifyCommandDelivery;
         closeRequested = true;
         eventLoop.execute(new NioEventLoop.Task() {
             @Override
             public void run() {
-                failAll(new BobaStrawConnectionException("Client closed"), false);
+                failAll(new BobaStrawConnectionException(
+                    classifyCommandDelivery ? "Connection retired after topology change" : "Client closed"
+                ), classifyCommandDelivery);
                 closeResources();
             }
 

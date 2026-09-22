@@ -79,7 +79,7 @@ class BobaStrawClientResourcesTest {
 
     @Test
     void blockingApplicationCompletionDoesNotBlockTheSharedEventLoop() throws Exception {
-        PingServer first = new PingServer(1, false);
+        PingServer first = new PingServer(1, true);
         PingServer second = new PingServer(1, false);
         first.start();
         second.start();
@@ -109,6 +109,9 @@ class BobaStrawClientResourcesTest {
                 }).toCompletableFuture();
 
             assertTrue(first.awaitFirstCommand());
+            // Register the continuation before permitting completion, otherwise thenApply may
+            // legally run on this test thread and wait for a latch that only this thread releases.
+            first.allowFirstReply();
             assertTrue(callbackStarted.await(2, TimeUnit.SECONDS));
 
             assertEquals(

@@ -371,7 +371,7 @@ public final class BobaStrawClusterClient implements AutoCloseable {
         }
         // Retiring a removed primary never replays its in-flight commands.
         for (Node node : retired) {
-            node.client.close();
+            node.client.retireForTopologyChange();
         }
         return true;
     }

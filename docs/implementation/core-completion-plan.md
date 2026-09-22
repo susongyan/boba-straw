@@ -1,6 +1,6 @@
 # 核心客户端后续执行顺序
 
-更新时间：2026-09-22。C1 基线为 `2bd4993`，C2 基线为 `9a227d4` 后的工作树。
+更新时间：2026-09-23。C1 基线为 `2bd4993`，C2 基线为 `9a227d4`，C3 基线为 `ae3990f`。
 TLS 后置，不再与本轮其他网络能力并行推进。
 
 ## 阶段与验收
@@ -9,7 +9,7 @@ TLS 后置，不再与本轮其他网络能力并行推进。
 | --- | --- | --- | --- |
 | C1 | 事务和阻塞命令专用连接 | 租约只归还一次；取消/超时/关闭销毁；池等待不阻塞归还；真实 WATCH/EXEC 和阻塞隔离验证 | 本文限定范围已完成 |
 | C2 | Cluster 连接与拓扑 | 节点退避重连、周期/事件刷新、故障摘除、MOVED/ASK 和多 Key 策略，真实集群故障测试 | 本文限定普通命令范围已完成 |
-| C3 | Sentinel | 多 Sentinel 发现、认证边界、主节点切换、旧连接处理、明确未知执行结果，真实切换验证 | 待实施 |
+| C3 | Sentinel | 多 Sentinel 发现、认证边界、主节点切换、旧连接处理、明确未知执行结果，真实切换验证 | 本文限定普通命令范围已完成 |
 | C4 | 可用环境的 JDK/平台验证 | 记录实际 JDK/OS/服务端矩阵，其他平台由 CI 验证，不将本机通过泛化 | 待实施 |
 | C5 | 命令和二进制接口 | 用命令开发 Skill 按数据结构分组，完善覆盖清单、返回类型、版本与协议测试 | 待实施 |
 | C6 | 拓扑功能收尾 | Cluster/Sentinel 与新增命令、专用连接组合验收；不重复宣称 C2/C3 已完成 | 待实施 |
@@ -138,3 +138,68 @@ Standalone 为 Redis 5.0.14、6.2.14、7.4.2、Valkey 8.1.3（AUTO/RESP2）；Cl
 未验证：Cluster 的 Redis 5/6.2 与 Valkey 矩阵、认证轮换、IPv6 实网、跨主机分区、长稳压力、
 JDK 11/25 和其他 OS。Cluster 专用命令组合留在 C6，更多命令与二进制接口留在 C5；
 TLS 仍明确后置。下一阶段为 C3 Sentinel。
+
+## C3 本阶段交付边界
+
+- 新增独立 `BobaStrawSentinelClient`：多个 Sentinel、masterName、独立 Sentinel/Redis 认证配置。
+- 查询主节点地址后，在实际业务物理连接上执行 ROLE 验证；相同主节点复用连接。
+- 周期发现、断线/READONLY/超时重新发现；失败有界退避，只重试发现，不重放业务请求。
+- 主节点切换退休旧连接，保留未发送/可能已执行分类；没有可用主连接时立即返回未发送失败。
+- 主地址、连接状态、发现成功/失败计数；外部 Resources 归属、关闭与取消视图有明确语义。
+- 暂提供普通 String Raw CompletionStage 入口；typed/binary、DB/URI、专用命令组合留在 C5/C6。
+
+设计与接入说明：[Sentinel 拓扑](../architecture/sentinel-topology.md)。
+新增 12 个模拟生命周期测试和 2 个真实 Sentinel 测试方法；真实方法分别遍历 RESP2/AUTO。
+测试使用专用 Redis 7.4.2 容器（一主一副本、三个 Sentinel），认证和主从切换不依赖其他项目环境。
+
+### C3 同步修复的基础边界
+
+1. 原 AUTH/HELLO/CLIENT SETNAME 失败后的 close 会遮住认证根因，改为保留握手错误并分类未发送请求。
+   初次新增认证失败测试因此失败，修正实现后定向回归通过，不放宽 WRONGPASS 断言。
+2. 拓扑主动关闭旧节点原来只产生通用关闭异常；新增内部 topology retirement 路径按写入状态分类。
+   Cluster 节点摘除也改用此路径，并增加已写未响应请求的针对性验证。
+   整仓回归发现紧接着关闭自有 Resources 时会抢先执行 shutdown，现使退休分类标记在 shutdown 路径保留。
+3. 原回调隔离测试可能在注册 thenApply 前已收到回复，导致回调合法地在测试线程等待自身放行。
+   改为先注册 continuation 再通过服务端 latch 放行，不更改超时或业务断言。
+4. ROLE 检查因本地容量不足被拒绝，不代表现有主连接失效；保留仍有效的主连接并安排发现退避，
+   新增单请求容量下在途业务不被关闭的测试。
+5. JDK 8 回归暴露旧慢订阅测试的时序假设：消息 burst 可能在 listener 开始前就触发关闭并取消排队回调。
+   现在先让第一条 listener 确认运行，再发送溢出 burst；仍要求及时关闭专用连接，不放宽原断言。
+
+已有公开方法不删除/改签名，不引入新的 core 运行时依赖。普通用户 close 保持既有行为。
+Skill 检查重点为认证/协议边界、响应 FIFO、主节点角色、资源归属和不可自动重放；没有启动独立 Agent。
+
+### C3 验证入口
+
+```sh
+sh scripts/sentinel-test-up.sh
+mvn clean test -q -Dboba.straw.runCompatibility=true -Dboba.straw.runCluster=true -Dboba.straw.runSentinel=true
+```
+
+源码为 `ae3990f` 后工作树；正式矩阵在隔离目录复制同一源码执行，避免编辑器自动编译覆盖 target。
+macOS x86_64 / Colima；Standalone 为 Redis 5/6.2/7.4、Valkey 8.1 的既有测试矩阵，
+Cluster 为 Redis 7.4.2 三主三副本，Sentinel 为 Redis 7.4.2 一主一副本、三个 Sentinel。
+最终源码逐文件比对与工作树 core/src 一致。每次更换 JDK 先 clean，三个矩阵串行执行。
+
+### C3 最终验收记录（2026-09-22 至 23）
+
+| JDK | 全模块构建与测试 | 真实服务端范围 |
+| --- | --- | --- |
+| Oracle 8u202 | 105 tests，0 failures/errors/skipped | Standalone 四服务端矩阵、Cluster 三场景、Sentinel 认证/切换 |
+| Oracle 17.0.10 | 105 tests，0 failures/errors/skipped | 同上 |
+| Oracle 21.0.7 | 105 tests，0 failures/errors/skipped | 同上 |
+
+Sentinel 认证及切换各遍历 RESP2/AUTO；使用的是真实 `SENTINEL FAILOVER`，不是模拟地址替换。
+未验证硬停主进程触发的 Sentinel 自动选主或跨主机网络分区，不将主动切换结果扩展为这些场景的通过。
+模拟测试另外覆盖写后断连、旧节点退休、切换时未发送失败、角色错误、认证错误、保留旧主连接、
+ROLE 本地背压、关闭/取消及外部 Resources。既有 Cluster 与普通命令回归均通过。
+
+最终环境检查：Sentinel 返回 3 个可用节点且 quorum/failover authorization 可达；Cluster 为
+`cluster_state:ok`、16384 Slot 全部正常。测试容器保留运行，没有更改其他项目容器。
+脚本通过 `sh -n`，工作树通过 `git diff --check`。隔离目录中的 Surefire 报告会随 clean 覆盖，
+本表不是不可变的 Maven 发布制品证明。
+
+下一阶段：C4 可用 JDK/平台兼容验收，再按计划进入 C5 命令与二进制接口；TLS 仍留在 C7。
+
+未验证：Sentinel Redis 5/6.2/Valkey、命名 ACL 用户、跨宿主网络分区、长稳、TLS、JDK 11/25 和其他 OS。
+自动发现更多 Sentinel、事件订阅加速、Replica 读取未提供；当前配置的多个 Sentinel 和周期重发现是基础恢复路径。

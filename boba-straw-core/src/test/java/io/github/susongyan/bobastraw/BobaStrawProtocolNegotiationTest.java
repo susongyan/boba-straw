@@ -417,8 +417,9 @@ class BobaStrawProtocolNegotiationTest {
             }).toCompletableFuture().get(2, TimeUnit.SECONDS);
 
             assertTrue(server.awaitSubscribe());
-            server.sendBurst();
+            server.sendFirstMessage();
             assertTrue(listenerStarted.await(2, TimeUnit.SECONDS));
+            server.sendBurst();
             assertTrue(server.awaitDedicatedClose());
             allowListener.countDown();
         } finally {
@@ -727,6 +728,7 @@ class BobaStrawProtocolNegotiationTest {
         private final ServerSocket serverSocket = new ServerSocket(0);
         private final CountDownLatch complete = new CountDownLatch(2);
         private final CountDownLatch subscribeReceived = new CountDownLatch(1);
+        private final CountDownLatch allowFirstMessage = new CountDownLatch(1);
         private final CountDownLatch allowBurst = new CountDownLatch(1);
         private final CountDownLatch dedicatedClose = new CountDownLatch(1);
         private final AtomicReference<Throwable> failure = new AtomicReference<Throwable>();
@@ -778,9 +780,12 @@ class BobaStrawProtocolNegotiationTest {
                         assertEquals(Arrays.asList("SUBSCRIBE", "events"), command);
                         session.write(">3\r\n+subscribe\r\n+events\r\n:1\r\n");
                         subscribeReceived.countDown();
+                        await(allowFirstMessage);
+                        session.write(">3\r\n+message\r\n+events\r\n+one\r\n");
+                        // Establish an active slow listener before overflowing its queue. Otherwise
+                        // an immediate burst can close/cancel it before the worker ever starts it.
                         await(allowBurst);
-                        session.write(">3\r\n+message\r\n+events\r\n+one\r\n"
-                            + ">3\r\n+message\r\n+events\r\n+two\r\n"
+                        session.write(">3\r\n+message\r\n+events\r\n+two\r\n"
                             + ">3\r\n+message\r\n+events\r\n+three\r\n");
                         session.awaitClientClose();
                         dedicatedClose.countDown();
@@ -801,6 +806,10 @@ class BobaStrawProtocolNegotiationTest {
 
         private void sendBurst() {
             allowBurst.countDown();
+        }
+
+        private void sendFirstMessage() {
+            allowFirstMessage.countDown();
         }
 
         private boolean awaitDedicatedClose() throws InterruptedException {

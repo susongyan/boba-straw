@@ -239,7 +239,7 @@ DedicatedConnectionLifecycleTest / DedicatedConnectionCompatibilityTest，范围
 - [ ] String/ByteArray Codec 及自定义 Codec SPI
 - [ ] Stream、Bitmap、HyperLogLog、EVALSHA、Server/ACL 命令
 - [ ] JDK SSLEngine TLS
-- [ ] Sentinel 主节点发现和切换感知
+- [x] Sentinel 普通主节点命令的发现和切换感知；专用连接组合留待 C6
 - [ ] Cluster 完整拓扑、故障切换和多 Key 校验
 - [ ] Spring Boot Health、Micrometer、Actuator、多客户端
 - [x] 确定性网络故障注入测试及独立执行入口
