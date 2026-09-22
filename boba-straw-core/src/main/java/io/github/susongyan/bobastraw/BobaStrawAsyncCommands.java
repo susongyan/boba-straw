@@ -23,6 +23,38 @@ public final class BobaStrawAsyncCommands {
         return string(client.executeAsync("PING"));
     }
 
+    /** Returns [key, value], or an empty list on server timeout. Client commandTimeout still applies. */
+    public CompletionStage<List<String>> blpop(long timeoutSeconds, String... keys) {
+        return BobaStrawStages.map(
+            client.executeBlocking(blockingPopArguments("BLPOP", timeoutSeconds, keys), false),
+            BobaStrawAsyncCommands::stringList
+        );
+    }
+
+    /** Like blpop, but removes the last element. Uses its own dedicated connection. */
+    public CompletionStage<List<String>> brpop(long timeoutSeconds, String... keys) {
+        return BobaStrawStages.map(
+            client.executeBlocking(blockingPopArguments("BRPOP", timeoutSeconds, keys), false),
+            BobaStrawAsyncCommands::stringList
+        );
+    }
+
+    static String[] blockingPopArguments(String command, long timeoutSeconds, String[] keys) {
+        if (timeoutSeconds < 0 || keys == null || keys.length == 0) {
+            throw new IllegalArgumentException("Blocking pop requires keys and a non-negative timeout");
+        }
+        String[] arguments = new String[keys.length + 2];
+        arguments[0] = command;
+        for (int index = 0; index < keys.length; index++) {
+            if (keys[index] == null) {
+                throw new IllegalArgumentException("Blocking pop keys must not be null");
+            }
+            arguments[index + 1] = keys[index];
+        }
+        arguments[arguments.length - 1] = Long.toString(timeoutSeconds);
+        return arguments;
+    }
+
     public CompletionStage<String> get(String key) {
         return string(client.executeAsync("GET", key));
     }

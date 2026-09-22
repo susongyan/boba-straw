@@ -37,6 +37,10 @@ Surefire XML。普通 `mvn test` 仍会执行这些测试，标签只提供独�
 | 单连接故障 | 同一 EventLoop 上只关闭一条连接 | 其他物理连接和 EventLoop 继续服务 |
 | 慢 Pub/Sub listener | 阻塞 listener 并耗尽有界 callback 队列 | 关闭专用连接而非静默丢消息；不影响共享命令连接 |
 | 退订与关闭竞态 | ACK 前排入消息，ACK 后关闭或等待 listener | ACK 前消息保序；socket 及时释放；关闭后不启动新 callback |
+| 事务池耗尽与关闭 | 占满池后并发借用，再归还、销毁或关闭 Client | 等待不阻塞归还，关闭唤醒等待者，不超建连接 |
+| 事务控制失败与取消 | MULTI/排队失败、EXEC 写后断连、WATCH/EXEC 取消 | 不错误发送后续命令，不重放，销毁专用租约 |
+| 阻塞命令取消与超时 | 不响应 BLPOP，同步等待中断或主动取消 | 关闭单次连接、释放容量，共享 PING 不受阻塞 |
+| 回调繁忙时专用连接失败 | 占用 callback worker，再让 WATCH/BLPOP 超时 | socket 与池容量在 transport 完成时释放，不依赖用户回调排空 |
 
 ## 验收边界
 

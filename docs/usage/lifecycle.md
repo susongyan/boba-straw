@@ -26,6 +26,27 @@ Client.close 是最终资源兜底。listener 容量耗尽可能关闭连接，�
 
 ## 事务
 
-当前 helper 会获取专用连接，构建后不要遗弃，按顺序提交命令并执行 exec。
-不要用取消 future 作为可靠的事务归还手段，也不要虚构 AutoCloseable 事务 API。
-WATCH 中止与执行结果检查、取消/异常归还需要单独验证。Redis 事务也不提供命令运行错误的回滚。
+helper 按需从有界事务池获取专用连接，支持 AutoCloseable，推荐 try-with-resources 防止遗弃。
+WATCH/UNWATCH 必须等待其 CompletionStage 完成，再开始下一操作；不跨线程混用 builder。
+成功 EXEC 或 discard 的 UNWATCH 确认后归还；取消、超时、错误或放弃时销毁连接，不重放事务。
+discard 清理本地命令和 WATCH；本实现仅在 exec 时才发送 MULTI。
+close/取消不能证明 EXEC 未执行。EXEC 内的错误值不导致其他命令回滚。
+为保持兼容，WATCH 冲突仍返回空列表，与空事务成功的空列表无法区分；需要业务自行保留上下文。
+
+```java
+try (BobaStrawTransaction transaction = client.transaction()) {
+    transaction.watch("key").toCompletableFuture().join();
+    transaction.command("SET", "key", "value").exec().toCompletableFuture().join();
+}
+```
+
+## 阻塞 List 命令
+
+Standalone 的 sync()/async() 提供 blpop(long timeoutSeconds, String... keys) 和 brpop。
+每次调用按需创建单次专用连接，完成、超时、取消或 Client 关闭后销毁，不占用共享连接。
+默认同时最多 32 条，可用 Builder.maxBlockingConnections(...) 设置；超限明确拒绝，不排无限队列。
+返回列表为 [key, value]；服务端正常等待超时返回空列表。客户端 commandTimeout 始终生效，
+即使 timeoutSeconds=0 也不是无限等待。需要等待服务端超时结果时，将客户端超时设得更长。
+取消从客户端方法最初返回的 Future 发起；同步等待被中断也关闭该次专用连接。
+不承诺被取消的 POP 没有消费元素，也不自动补发。其他阻塞命令、Cluster 和二进制阻塞接口仍待扩展。
+不要通过共享 Raw/Pipeline 发送阻塞命令。

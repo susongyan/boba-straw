@@ -40,6 +40,8 @@ public final class BobaStrawClient implements AutoCloseable {
     private final Object dedicatedConnectionLock = new Object();
     private final Set<NioConnection> dedicatedConnections = new HashSet<NioConnection>();
     private final Set<NioConnection> drainingPubSubConnections = new HashSet<NioConnection>();
+    private final Set<NioConnection> blockingConnections = new HashSet<NioConnection>();
+    private final int maxBlockingConnections;
     private volatile boolean closed;
     private volatile BobaStrawConnectionState sharedConnectionState = BobaStrawConnectionState.CONNECTING;
     private long reconnectGeneration;
@@ -77,6 +79,7 @@ public final class BobaStrawClient implements AutoCloseable {
         this.password = builder.password;
         this.clientName = builder.clientName;
         this.idlePingInterval = builder.idlePingInterval;
+        this.maxBlockingConnections = builder.maxBlockingConnections;
         this.reconnectDelay = reconnectInterval;
         installSharedConnection(createConnection(), false);
         this.transactionPoolMaxSize = builder.transactionPoolMaxSize;
@@ -107,8 +110,9 @@ public final class BobaStrawClient implements AutoCloseable {
     }
 
     public BobaStrawTransaction transaction() {
-        ensureClientOpen();
+        TransactionConnectionPool pool;
         synchronized (this) {
+            ensureClientOpen();
             if (transactionPool == null) {
                 transactionPool = new TransactionConnectionPool(
                     host, port, commandTimeout, protocolVersion, username, password,
@@ -117,8 +121,10 @@ public final class BobaStrawClient implements AutoCloseable {
                     connectionLimits
                 );
             }
-            return new BobaStrawTransaction(this, transactionPool.acquire());
+            pool = transactionPool;
         }
+        // Acquisition may wait; release and close need the client monitor.
+        return new BobaStrawTransaction(this, pool.acquire());
     }
 
     public BobaStrawPubSub pubSub() {
@@ -211,6 +217,39 @@ public final class BobaStrawClient implements AutoCloseable {
 
     CompletionStage<List<RespValue>> executeBatch(List<String[]> commands) {
         return sharedConnection().executeBatch(commands);
+    }
+
+    CompletionStage<RespValue> executeBlocking(String[] command, boolean transportCompletion) {
+        final NioConnection dedicated;
+        synchronized (dedicatedConnectionLock) {
+            ensureClientOpen();
+            if (blockingConnections.size() >= maxBlockingConnections) {
+                java.util.concurrent.CompletableFuture<RespValue> rejected =
+                    new java.util.concurrent.CompletableFuture<RespValue>();
+                rejected.completeExceptionally(new BobaStrawBackpressureException(
+                    "Blocking connection capacity is exhausted; command was not sent"
+                ));
+                return rejected;
+            }
+            dedicated = connectionFactory.create(
+                host, port, commandTimeout, protocolVersion, username, password,
+                clientName, null, Duration.ZERO, respLimits, connectionLimits
+            );
+            blockingConnections.add(dedicated);
+            dedicatedConnections.add(dedicated);
+        }
+        dedicated.onClose(() -> {
+            synchronized (dedicatedConnectionLock) {
+                blockingConnections.remove(dedicated);
+                dedicatedConnections.remove(dedicated);
+            }
+        });
+        try {
+            return dedicated.executeDedicated(command, transportCompletion);
+        } catch (RuntimeException error) {
+            closeDedicated(dedicated);
+            throw error;
+        }
     }
 
     private synchronized void installSharedConnection(
@@ -386,6 +425,7 @@ public final class BobaStrawClient implements AutoCloseable {
         try {
             return result.toCompletableFuture().get();
         } catch (InterruptedException error) {
+            result.toCompletableFuture().cancel(false);
             Thread.currentThread().interrupt();
             throw new BobaStrawConnectionException(
                 "Interrupted while waiting for a Redis command",
@@ -426,6 +466,7 @@ public final class BobaStrawClient implements AutoCloseable {
             dedicatedToClose.addAll(drainingPubSubConnections);
             dedicatedConnections.clear();
             drainingPubSubConnections.clear();
+            blockingConnections.clear();
         }
         for (NioConnection dedicated : dedicatedToClose) {
             dedicated.close();
@@ -444,6 +485,7 @@ public final class BobaStrawClient implements AutoCloseable {
         private String password;
         private String clientName;
         private int transactionPoolMaxSize = 8;
+        private int maxBlockingConnections = 32;
         private Duration transactionAcquireTimeout = Duration.ofSeconds(1);
         private Duration transactionIdleTimeout = Duration.ofMinutes(1);
         private Duration idlePingInterval = Duration.ZERO;
@@ -513,6 +555,15 @@ public final class BobaStrawClient implements AutoCloseable {
                 throw new IllegalArgumentException("transactionPoolMaxSize must be positive");
             }
             this.transactionPoolMaxSize = value;
+            return this;
+        }
+
+        /** Bounds concurrent blocking commands; connections are opened on demand, never pooled. */
+        public Builder maxBlockingConnections(int value) {
+            if (value < 1) {
+                throw new IllegalArgumentException("maxBlockingConnections must be positive");
+            }
+            this.maxBlockingConnections = value;
             return this;
         }
 

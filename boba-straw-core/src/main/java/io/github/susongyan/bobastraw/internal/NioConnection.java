@@ -295,6 +295,43 @@ public final class NioConnection implements AutoCloseable {
         return executeTransportExternal(RespCodec.encodeCommand(command));
     }
 
+    /** Executes the sole command on a dedicated connection and always closes its transport. */
+    public CompletionStage<RespValue> executeDedicated(String[] command, boolean transportCompletion) {
+        return executeManaged(command, transportCompletion, true);
+    }
+
+    /** A transaction lease cannot be reused after a command failure or cancellation. */
+    public CompletionStage<RespValue> executeStateful(String[] command) {
+        return executeManaged(command, false, false);
+    }
+
+    private CompletionStage<RespValue> executeManaged(
+        String[] command, boolean transportCompletion, boolean closeOnSuccess
+    ) {
+        byte[] encoded = RespCodec.encodeCommand(command);
+        ConnectionCapacity.Reservation capacityReservation = reserveCapacity(encoded.length);
+        if (capacityReservation == null) {
+            close();
+            return connectionBackpressure("Dedicated Redis command was not sent");
+        }
+        BobaCallbackDispatcher.Reservation callback = transportCompletion ? null : reserveCallbackSlot();
+        if (!transportCompletion && callbackDispatcher != null && callback == null) {
+            capacityReservation.releaseAll();
+            close();
+            return failedStage(new BobaStrawBackpressureException(
+                "Boba Straw callback capacity is exhausted; Redis command was not sent"
+            ));
+        }
+        Request request = enqueueExternal(encoded, capacityReservation);
+        // Cleanup runs on transport completion, even when callback workers are occupied.
+        request.future.whenComplete((value, error) -> {
+            if (closeOnSuccess || error != null) {
+                close();
+            }
+        });
+        return exposeToCaller(request, callback, true);
+    }
+
     /**
      * Sends a Pub/Sub command whose action must run after listener callbacks decoded before its
      * response. This is used for unsubscribe cleanup so a successful acknowledgement cannot
@@ -360,7 +397,23 @@ public final class NioConnection implements AutoCloseable {
         final Request request,
         final BobaCallbackDispatcher.Reservation reservation
     ) {
-        final CompletableFuture<RespValue> result = new CompletableFuture<RespValue>();
+        return exposeToCaller(request, reservation, false);
+    }
+
+    private CompletableFuture<RespValue> exposeToCaller(
+        final Request request,
+        final BobaCallbackDispatcher.Reservation reservation,
+        final boolean dedicated
+    ) {
+        final CompletableFuture<RespValue> result = new CompletableFuture<RespValue>() {
+            @Override
+            public boolean cancel(boolean mayInterruptIfRunning) {
+                if (dedicated && !isDone()) {
+                    NioConnection.this.close();
+                }
+                return super.cancel(mayInterruptIfRunning);
+            }
+        };
         request.future.whenComplete((value, requestError) -> {
             if (result.isDone()) {
                 releaseUndispatched(reservation);

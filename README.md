@@ -44,7 +44,11 @@ BobaStrawClient client = BobaStrawClient.builder()
     .build();
 ```
 
-普通命令默认按每个 Redis 节点复用一个共享多路复用连接，不需要配置连接池大小。事务、Pub/Sub 和阻塞命令使用独立连接。
+普通命令默认按每个 Redis 节点复用一个共享多路复用连接，不需要配置连接池大小。
+事务与 Pub/Sub 使用独立连接；Standalone 的 `sync()/async().blpop/brpop` 也使用按需单次
+专用连接。阻塞连接默认并发上限 32，可用 `maxBlockingConnections(...)` 调整。
+事务支持 try-with-resources，取消/异常时销毁租约；使用约束见
+[生命周期指南](docs/usage/lifecycle.md)。其他阻塞命令不得直接发送到共享 Raw/Pipeline。
 
 每条物理连接默认最多接纳 4,096 条尚未排空响应的应用命令和 16 MiB 尚未写入 socket 的
 编码命令帧。超过任一上限会立即得到 `BobaStrawBackpressureException`，命令不会发送到 Redis。

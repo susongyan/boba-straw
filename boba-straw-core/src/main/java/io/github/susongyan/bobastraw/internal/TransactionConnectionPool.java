@@ -8,8 +8,6 @@ import java.util.ArrayDeque;
 import java.util.Deque;
 import java.util.HashSet;
 import java.util.Set;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
 /** Lazy, bounded pool for stateful transaction connections. */
@@ -32,7 +30,7 @@ public final class TransactionConnectionPool implements AutoCloseable {
     private final Set<NioConnection> active = new HashSet<NioConnection>();
     private int created;
     private boolean closed;
-    private final ScheduledExecutorService reaper;
+    private NioConnectionFactory.ScheduledTask reaper;
 
     /**
      * @deprecated Internal compatibility constructor. Prefer BobaStrawClient.transaction(),
@@ -174,21 +172,15 @@ public final class TransactionConnectionPool implements AutoCloseable {
         this.respLimits = respLimits;
         this.connectionLimits = connectionLimits;
         this.legacyOwnedEventLoops = legacyOwnedEventLoops;
-        this.reaper = Executors.newSingleThreadScheduledExecutor(runnable -> {
-            Thread thread = new Thread(runnable, "boba-straw-transaction-reaper");
-            thread.setDaemon(true);
-            return thread;
-        });
-        long period = Math.max(1L, idleTimeout.toMillis());
-        reaper.scheduleAtFixedRate(this::reapIdle, period, period, TimeUnit.MILLISECONDS);
+        scheduleReaper();
     }
 
     public synchronized NioConnection acquire() {
-        if (closed) {
-            throw new IllegalStateException("Transaction pool is closed");
-        }
         long deadline = System.nanoTime() + acquireTimeout.toNanos();
         while (true) {
+            if (closed) {
+                throw new IllegalStateException("Transaction pool is closed");
+            }
             IdleConnection available = idle.pollFirst();
             if (available != null) {
                 NioConnection connection = available.connection;
@@ -201,12 +193,13 @@ public final class TransactionConnectionPool implements AutoCloseable {
                 return connection;
             }
             if (created < maxSize) {
-                created++;
                 NioConnection connection = connectionFactory.create(
                     host, port, timeout, protocol, username, password, clientName,
                     null, Duration.ZERO, respLimits, connectionLimits
                 );
+                created++;
                 active.add(connection);
+                connection.onClose(() -> forgetClosed(connection));
                 return connection;
             }
             long remaining = deadline - System.nanoTime();
@@ -227,7 +220,9 @@ public final class TransactionConnectionPool implements AutoCloseable {
             connection.close();
             return;
         }
-        active.remove(connection);
+        if (!active.remove(connection)) {
+            return;
+        }
         if (!connection.isOpen()) {
             created--;
             connection.close();
@@ -238,9 +233,27 @@ public final class TransactionConnectionPool implements AutoCloseable {
     }
 
     public synchronized void destroy(NioConnection connection) {
-        created--;
-        active.remove(connection);
-        connection.close();
+        if (active.remove(connection)) {
+            created--;
+            connection.close();
+            notifyAll();
+        }
+    }
+
+    private synchronized void forgetClosed(NioConnection connection) {
+        boolean removed = active.remove(connection);
+        java.util.Iterator<IdleConnection> iterator = idle.iterator();
+        while (iterator.hasNext()) {
+            if (iterator.next().connection == connection) {
+                iterator.remove();
+                removed = true;
+                break;
+            }
+        }
+        if (removed) {
+            created--;
+            notifyAll();
+        }
     }
 
     @Override
@@ -257,7 +270,10 @@ public final class TransactionConnectionPool implements AutoCloseable {
                 created--;
             }
             active.clear();
-            reaper.shutdownNow();
+            if (reaper != null) {
+                reaper.cancel();
+                reaper = null;
+            }
             notifyAll();
             resourcesToClose = legacyOwnedEventLoops;
         }
@@ -281,6 +297,11 @@ public final class TransactionConnectionPool implements AutoCloseable {
             candidate.connection.close();
         }
         notifyAll();
+        scheduleReaper();
+    }
+
+    private void scheduleReaper() {
+        reaper = connectionFactory.schedule(this::reapIdle, idleTimeout);
     }
 
     private static final class IdleConnection {

@@ -19,6 +19,20 @@ public final class BobaStrawSyncCommands {
         return string("PING");
     }
 
+    /** Dedicated blocking pop; client commandTimeout applies even when timeoutSeconds is zero. */
+    public List<String> blpop(long timeoutSeconds, String... keys) {
+        return BobaStrawAsyncCommands.stringList(client.await(client.executeBlocking(
+            BobaStrawAsyncCommands.blockingPopArguments("BLPOP", timeoutSeconds, keys), true
+        )));
+    }
+
+    /** Dedicated blocking pop from the end of a list. */
+    public List<String> brpop(long timeoutSeconds, String... keys) {
+        return BobaStrawAsyncCommands.stringList(client.await(client.executeBlocking(
+            BobaStrawAsyncCommands.blockingPopArguments("BRPOP", timeoutSeconds, keys), true
+        )));
+    }
+
     public String get(String key) {
         return string("GET", key);
     }

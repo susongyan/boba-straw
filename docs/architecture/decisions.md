@@ -14,7 +14,11 @@ The client does not automatically retry commands. A timeout or disconnect after 
 
 ## Connection model
 
-普通命令默认使用每个 Redis 节点一个共享的 NIO 多路复用连接，不要求业务配置连接池大小。事务、Pub/Sub 和阻塞命令使用独占连接；未来只为这些状态型场景提供可选专用连接池。Cluster 模式按节点分别维护共享连接。
+普通命令默认使用每个 Redis 节点一个共享的 NIO 多路复用连接，不要求业务配置连接池大小。
+事务使用懒加载有界池；成功 EXEC 或显式放弃时 UNWATCH 确认后归还，取消/失败/未完成 close
+均销毁。池借用不持有 Client 锁，空闲回收使用共享 EventLoop 定时任务。
+Pub/Sub 使用独占连接；Standalone BLPOP/BRPOP 使用有并发上限的按需单次连接，不入池，
+结束或取消即关闭。其他阻塞命令及 Cluster 阻塞入口仍未完成。Cluster 普通命令按节点共享连接。
 
 共享连接使用 `BobaStrawConnectionLimits` 做每物理连接的准入保护：默认上限为 4,096 个
 未排空响应的应用命令和 16 MiB 尚未写入 socket 的编码命令帧。这与 Resources 级 callback

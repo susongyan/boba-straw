@@ -2,6 +2,8 @@
 
 本文档记录已实现功能、验证结果和后续工作，是研发与 AI 协作时的进度基线。
 
+2026-09-22 起的执行顺序及 TLS 后置决定见[核心收尾计划](core-completion-plan.md)。
+
 状态：
 - [x] 已实现并通过验收
 - [~] 已有实现，但未达到生产验收
@@ -26,7 +28,7 @@
 - [x] 事务和 Pub/Sub 使用独占连接
 - [x] `BobaStrawClientResources` 共享固定数量的 Selector EventLoop
 - [x] 有界 callback dispatcher 与 Pub/Sub listener 串行隔离
-- [~] 状态型专用连接池（事务连接池已懒加载，Pub/Sub/阻塞命令待补）
+- [x] 事务懒加载专用连接池；Pub/Sub 不入池，BLPOP/BRPOP 使用有界单次专用连接
 - [x] 每条物理连接的 in-flight / 待写字节准入上限
 - [x] Standalone 共享连接的 lifecycle 驱动指数退避重连与状态快照
 - [x] 可选空闲连接 PING 健康检测
@@ -176,9 +178,10 @@ Sentinel、TLS、Cluster 生产化等仍按本文件对应功能条目跟踪。
 - [x] ZADD、ZRANGE
 - [x] Lua EVAL 基础入口
 - [x] Pipeline 有序 API
-- [~] MULTI/EXEC/DISCARD 专用连接 helper
+- [x] MULTI/EXEC 与本地 discard 专用连接 helper，支持 AutoCloseable
 
-验收结果：基础命令、Pipeline、事务 helper、Lua 已在 Redis/Valkey 兼容测试中验证；事务专用连接已接入，但仍需并发隔离和异常归还测试。
+基础命令、Pipeline、事务 helper、Lua 已有 Redis/Valkey 兼容测试。事务与阻塞连接新增
+DedicatedConnectionLifecycleTest / DedicatedConnectionCompatibilityTest，范围与环境见核心收尾计划。
 
 ### 本地测试环境
 
@@ -219,12 +222,13 @@ Sentinel、TLS、Cluster 生产化等仍按本文件对应功能条目跟踪。
 
 - [~] Pub/Sub 专用连接、订阅管理、RESP2 消息和 RESP3 Push 分发
 - [~] 真正批量 Pipeline 编码和批量 Socket 写入
-- [~] 事务专用连接、WATCH/UNWATCH 和连接归还
-- [~] TransactionConnectionPool（按需创建、上限、成功归还、异常销毁）
+- [x] 事务专用连接、WATCH/UNWATCH、成功归还及取消/异常销毁
+- [x] TransactionConnectionPool（按需创建、上限、锁外等待、关闭唤醒及空闲回收）
 - [x] 事务连接获取等待超时
 - [x] 事务空闲连接回收
-- [x] 归还时健康检查
-- [ ] 通用 ConnectionFactory
+- [x] 归还时连接存活与状态清理确认；不额外发送 PING
+- [x] 共享 NioConnectionFactory
+- [x] Standalone BLPOP/BRPOP 的同步/异步专用连接；更多阻塞命令仍待扩展
 - [x] Pipeline 与命令超时到物理请求的取消传播和响应排空
 - [x] 未发送/可能已执行请求的失败分类
 - [x] Standalone 有界退避重连、连接状态与指标管理
@@ -236,7 +240,7 @@ Sentinel、TLS、Cluster 生产化等仍按本文件对应功能条目跟踪。
 - [ ] Cluster 完整拓扑、故障切换和多 Key 校验
 - [ ] Spring Boot Health、Micrometer、Actuator、多客户端
 - [x] 确定性网络故障注入测试及独立执行入口
-- [~] 并发与 JMH 测试（正式基线已覆盖主要路径，Valkey 观测与 instrumentation 隔离 A/B 待完成）
+- [x] 网络模型阶段六并发与 JMH 基线（Valkey 观测及 instrumentation A/B 已完成；非完整发布矩阵）
 - [ ] Checkstyle、SpotBugs、ArchUnit、JaCoCo、Revapi/japicmp、Enforcer 门禁
 - [ ] LICENSE、NOTICE、Maven Central 发布元数据
 
