@@ -43,6 +43,7 @@ exponential backoff 重建；BACKING_OFF 中的新调用明确以“未发送”
 
 ## Current delivery boundary
 
-Standalone 是当前唯一达到基础验收的连接拓扑。Cluster 已有实验性的 seed 发现、slot 路由和
-单次 MOVED/ASK 跳转，但尚未具备周期拓扑刷新、故障摘除、跨 Slot 规则和完整 reconnect
-管理，因此不得作生产支持承诺。Sentinel 和 TLS 仍未实现。
+Standalone 已达到基础验收。Cluster 普通主节点命令具有节点退避重连、周期/事件拓扑发现、
+非 seed 旧节点摘除、已知多 Key 同 Slot 校验和单次 MOVED/ASK；ASK 使用单次专用连接，
+不污染共享连接状态和永久 Slot 映射。完整边界见 [cluster-topology.md](cluster-topology.md)。
+这不包含 Cluster 事务/Pipeline/Pub/Sub/阻塞接口，也不等于生产长稳验收。Sentinel 和 TLS 仍未实现。

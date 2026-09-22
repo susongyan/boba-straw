@@ -4,6 +4,9 @@ import io.github.susongyan.bobastraw.internal.BobaCallbackDispatcher;
 import io.github.susongyan.bobastraw.internal.NioConnectionFactory;
 import io.github.susongyan.bobastraw.internal.NioEventLoopGroup;
 
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
+
 /**
  * Shareable owner of Boba Straw selector threads.
  *
@@ -55,6 +58,35 @@ public final class BobaStrawClientResources implements AutoCloseable {
 
     NioConnectionFactory connectionFactory() {
         return connectionFactory;
+    }
+
+    /** Isolates client-level lifecycle completions from Selector threads. */
+    <T> CompletionStage<T> exposeCompletion(CompletionStage<T> source) {
+        final CompletableFuture<T> result = new CompletableFuture<T>();
+        final BobaCallbackDispatcher.Reservation reservation = callbacks.tryReserve();
+        if (reservation == null) {
+            result.completeExceptionally(new BobaStrawBackpressureException("Callback capacity is exhausted"));
+            return result;
+        }
+        source.whenComplete((value, error) -> {
+            if (result.isDone()) {
+                reservation.releaseIfUndispatched();
+            } else if (!reservation.dispatch(() -> {
+                if (error == null) {
+                    result.complete(value);
+                } else {
+                    result.completeExceptionally(error);
+                }
+            })) {
+                result.completeExceptionally(new BobaStrawBackpressureException("Callback dispatcher is closed"));
+            }
+        });
+        result.whenComplete((value, error) -> {
+            if (result.isCancelled()) {
+                reservation.releaseIfUndispatched();
+            }
+        });
+        return result;
     }
 
     @Override

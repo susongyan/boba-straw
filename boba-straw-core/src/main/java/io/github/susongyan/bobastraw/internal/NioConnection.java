@@ -6,6 +6,7 @@ import io.github.susongyan.bobastraw.BobaStrawCommandNotSentException;
 import io.github.susongyan.bobastraw.BobaStrawCommandTimeoutException;
 import io.github.susongyan.bobastraw.BobaStrawConnectionException;
 import io.github.susongyan.bobastraw.BobaStrawConnectionLimits;
+import io.github.susongyan.bobastraw.BobaStrawServerException;
 import io.github.susongyan.bobastraw.ProtocolVersion;
 import io.github.susongyan.bobastraw.protocol.RespCodec;
 import io.github.susongyan.bobastraw.protocol.RespLimits;
@@ -1397,7 +1398,11 @@ public final class NioConnection implements AutoCloseable {
         releaseRequestCapacity(request);
         if (value instanceof RespValue.Error) {
             request.future.completeExceptionally(
-                new BobaStrawConnectionException(((RespValue.Error) value).message)
+                new BobaStrawServerException(((RespValue.Error) value).message)
+            );
+        } else if (value instanceof RespValue.BlobError) {
+            request.future.completeExceptionally(
+                new BobaStrawServerException(((RespValue.BlobError) value).message())
             );
         } else {
             request.future.complete(value);

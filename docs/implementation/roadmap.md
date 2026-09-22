@@ -199,15 +199,18 @@ DedicatedConnectionLifecycleTest / DedicatedConnectionCompatibilityTest，范围
 
 ### Cluster
 
-- [~] 独立 BobaStrawClusterClient 入口
-- [~] CLUSTER SLOTS 初始发现
-- [~] CRC16 Slot 计算
-- [~] Hash Tag
-- [~] Slot 到节点路由
-- [~] MOVED 一次重定向
-- [~] ASK/ASKING 一次重定向
+- [x] 独立 BobaStrawClusterClient 普通命令入口
+- [x] CLUSTER SLOTS 多 seed 初始发现、周期/事件刷新和原子快照校验
+- [x] CRC16 Slot 计算与 Hash Tag
+- [x] Slot 到主节点路由、节点退避重连和旧非 seed 节点摘除
+- [x] MOVED 一次重定向
+- [x] ASK/ASKING 一次专用连接重定向、取消与容量限制
+- [x] 已知命令提取 Key/跨 Slot 拒绝，未知普通命令显式 Key 入口
 
-尚未达到生产验收：拓扑周期刷新、连接池、故障摘除、Replica 读策略、跨 Slot 校验、Cluster Pipeline/事务/PubSub 语义。
+尚未达到完整生产验收：Replica 读策略、Cluster Pipeline/事务/PubSub/阻塞语义、跨主机分区和
+长稳压力。普通命令每节点复用连接，不要求共享连接池；专用组合留待 C6。
+设计与测试入口见 [Cluster 拓扑](../architecture/cluster-topology.md)，实际记录见
+[核心收尾计划](core-completion-plan.md)。
 
 ### Spring Boot
 

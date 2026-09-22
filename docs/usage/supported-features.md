@@ -12,7 +12,7 @@
 | Pub/Sub | 异步订阅确认，close 发起退订；不是等待全部回调完成的同步屏障 | BobaStrawProtocolNegotiationTest |
 | 事务 helper、懒加载池 | AutoCloseable；取消/失败销毁、成功归还；WATCH 冲突保留空列表兼容行为 | DedicatedConnectionLifecycleTest / DedicatedConnectionCompatibilityTest |
 | String / binary / Lua | 常用命令子集；binary facade 为异步 GET/SET/DEL，其他可用 Raw | RedisCompatibilityTest / RespCodecTest |
-| Cluster | 实验性 seeds、Slot、Hash Tag、MOVED/ASK；完整拓扑与多 Key 策略不足 | ClusterSlotTest 不能代替真实故障切换验收 |
+| Cluster | 普通主节点命令：多 seed、Slot/Hash Tag、退避重连、周期/事件刷新、MOVED、独占 ASK、已知多 Key 校验；专用命令和生产长稳仍待完成 | ClusterSlotTest / ClusterLifecycleTest / opt-in ClusterIntegrationTest；详见核心收尾计划 |
 | TLS / Sentinel | 未实现 | 无 |
 | 阻塞命令专用管理 | Standalone 同步/异步 BLPOP、BRPOP；有界按需单次连接，更多阻塞命令待扩展 | DedicatedConnectionLifecycleTest / DedicatedConnectionCompatibilityTest |
 | Spring Boot | 基础单客户端配置；示例工程及 Boot 版本矩阵尚未验收 | 尚无 SpringContextTest，不作示例已验证声明 |

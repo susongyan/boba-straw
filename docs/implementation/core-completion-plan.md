@@ -1,13 +1,14 @@
 # 核心客户端后续执行顺序
 
-更新时间：2026-09-22。基线：`2bd4993` 后的工作树。TLS 后置，不再与本轮其他网络能力并行推进。
+更新时间：2026-09-22。C1 基线为 `2bd4993`，C2 基线为 `9a227d4` 后的工作树。
+TLS 后置，不再与本轮其他网络能力并行推进。
 
 ## 阶段与验收
 
 | 顺序 | 范围 | 完成条件 | 状态 |
 | --- | --- | --- | --- |
 | C1 | 事务和阻塞命令专用连接 | 租约只归还一次；取消/超时/关闭销毁；池等待不阻塞归还；真实 WATCH/EXEC 和阻塞隔离验证 | 本文限定范围已完成 |
-| C2 | Cluster 连接与拓扑 | 节点退避重连、周期/事件刷新、故障摘除、MOVED/ASK 和多 Key 策略，真实集群故障测试 | 待实施 |
+| C2 | Cluster 连接与拓扑 | 节点退避重连、周期/事件刷新、故障摘除、MOVED/ASK 和多 Key 策略，真实集群故障测试 | 本文限定普通命令范围已完成 |
 | C3 | Sentinel | 多 Sentinel 发现、认证边界、主节点切换、旧连接处理、明确未知执行结果，真实切换验证 | 待实施 |
 | C4 | 可用环境的 JDK/平台验证 | 记录实际 JDK/OS/服务端矩阵，其他平台由 CI 验证，不将本机通过泛化 | 待实施 |
 | C5 | 命令和二进制接口 | 用命令开发 Skill 按数据结构分组，完善覆盖清单、返回类型、版本与协议测试 | 待实施 |
@@ -82,6 +83,58 @@ discard 改为真正清理本地待执行事务，而不是在尚未 MULTI 时�
 
 ## C2 开始前已识别的重点
 
-当前 Cluster 仍为旧实验实现：不能将 ASK 临时目标写成永久 Slot 所有者；ASKING 与目标命令
+本阶段开始时 Cluster 仍为旧实验实现：不能将 ASK 临时目标写成永久 Slot 所有者；ASKING 与目标命令
 必须独占同一连接，避免被其他共享请求消费。刷新需原子替换经过校验的 Slot 快照，
 节点关闭后只恢复连接、不重放未知执行结果。C2 必须分别验证这些语义，而不只增加刷新定时器。
+
+## C2 本阶段交付边界
+
+- 普通主节点命令：节点复用 Standalone 退避重连，周期/事件发现和原子快照替换；非 seed 旧节点摘除。
+- MOVED 最多一次，ASK 独占 ASKING/目标请求，临时连接有界并正确取消/关闭。
+- 已知命令提取所有 Key、跨 Slot 拒绝；未知普通命令改用显式全部 Key 的入口。
+- 顶层明确服务端错误独立分类；超时、连接中断、未知执行结果不自动重发。
+- 节点 metrics、拓扑版本/刷新计数；主动刷新视图取消不影响内部共享刷新。
+- 新增六节点一次性测试环境、12 个模拟生命周期测试与 3 个 opt-in 真实 Cluster 测试。
+
+完整配置、失败边界和兼容性说明见 [Cluster 拓扑设计](../architecture/cluster-topology.md)。
+C2 不含 Cluster typed/binary、事务/Pipeline/PubSub/阻塞入口，亦不宣称完成生产长稳或跨主机分区验收。
+
+### C2 测试命令
+
+```sh
+sh scripts/cluster-test-up.sh
+mvn clean test -q -Dboba.straw.runCompatibility=true -Dboba.straw.runCluster=true
+```
+
+源码基线：`9a227d4` 加本阶段工作树；平台 macOS x86_64 / Colima。
+Standalone 为 Redis 5.0.14、6.2.14、7.4.2、Valkey 8.1.3（AUTO/RESP2）；Cluster 为 Redis 7.4.2
+三主三副本，ASK/多 Key 覆盖 AUTO/RESP2，主动切换 AUTO，不可用主节点自动选主 RESP2。
+
+初轮 Cluster 验收出现连接超时与 Docker 控制超时；不放宽原断言，后续定向及全量重跑通过。
+故障恢复增加容器内自动 CONT 保护。JDK 8 首轮工作目录出现混合编译产物的
+`NoSuchMethodError`，改在独立临时目录复制同一源码并 clean 构建，避免编辑器编译干扰。
+隔离运行还发现测试间主从切换尚未收敛就开始下一故障场景的问题：增加副本就绪前置检查，
+不修改命令超时或隐藏客户端失败。
+
+### C2 最终验收记录（2026-09-22）
+
+在隔离临时目录执行上述完整命令，避免编辑器与 Maven 同时写入 target。
+逐文件对比确认 core/src 与工作树一致；每次换 JDK 均 clean，未并行运行集群测试。
+
+| JDK | 全模块构建与测试 | 真实服务端测试 |
+| --- | --- | --- |
+| Oracle 8u202 | 91 tests，0 failures/errors/skipped | 四服务端 AUTO/RESP2 与 Cluster 三场景通过 |
+| Oracle 17.0.10 | 91 tests，0 failures/errors/skipped | 同上 |
+| Oracle 21.0.7 | 91 tests，0 failures/errors/skipped | 同上 |
+
+报告生成于隔离构建的 core/target/surefire-reports，随 clean 覆盖；本表不是发布制品证明。
+阶段末检查测试集群为 `cluster_state:ok`、16384 Slot 全部正常。测试容器保持运行，未更改其他项目容器。
+脚本通过 `sh -n`，改动通过 `git diff --check`。无新增 core 运行时依赖。
+
+审查覆盖：仅明确服务端拒绝才允许一次重定向；ASKING 与目标命令独占连接；取消关闭临时连接；
+不覆盖较新的 MOVED 路由；旧非 seed 节点摘除；外部 Resources 归属；错误帧不消耗下一请求响应。
+按照开发/命令/审查 Skill 的清单执行本阶段检查，没有启动独立 AI Agent 或宣称跨模型验收。
+
+未验证：Cluster 的 Redis 5/6.2 与 Valkey 矩阵、认证轮换、IPv6 实网、跨主机分区、长稳压力、
+JDK 11/25 和其他 OS。Cluster 专用命令组合留在 C6，更多命令与二进制接口留在 C5；
+TLS 仍明确后置。下一阶段为 C3 Sentinel。
