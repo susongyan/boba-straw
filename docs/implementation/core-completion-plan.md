@@ -1,6 +1,6 @@
 # 核心客户端后续执行顺序
 
-更新时间：2026-09-23。C1 基线为 `2bd4993`，C2 基线为 `9a227d4`，C3 基线为 `ae3990f`。
+更新时间：2026-09-27。C1 基线为 `2bd4993`，C2 基线为 `9a227d4`，C3 基线为 `ae3990f`，C4 基线为 `c696ae3`。
 TLS 后置，不再与本轮其他网络能力并行推进。
 
 ## 阶段与验收
@@ -10,7 +10,7 @@ TLS 后置，不再与本轮其他网络能力并行推进。
 | C1 | 事务和阻塞命令专用连接 | 租约只归还一次；取消/超时/关闭销毁；池等待不阻塞归还；真实 WATCH/EXEC 和阻塞隔离验证 | 本文限定范围已完成 |
 | C2 | Cluster 连接与拓扑 | 节点退避重连、周期/事件刷新、故障摘除、MOVED/ASK 和多 Key 策略，真实集群故障测试 | 本文限定普通命令范围已完成 |
 | C3 | Sentinel | 多 Sentinel 发现、认证边界、主节点切换、旧连接处理、明确未知执行结果，真实切换验证 | 本文限定普通命令范围已完成 |
-| C4 | 可用环境的 JDK/平台验证 | 记录实际 JDK/OS/服务端矩阵，其他平台由 CI 验证，不将本机通过泛化 | 待实施 |
+| C4 | 可用环境的 JDK/平台验证 | 记录实际 JDK/OS/服务端矩阵，其他平台由 CI 验证，不将本机通过泛化 | 本机 8/11/17/21 通过；25 与其他平台待验证，入口已落地 |
 | C5 | 命令和二进制接口 | 用命令开发 Skill 按数据结构分组，完善覆盖清单、返回类型、版本与协议测试 | 待实施 |
 | C6 | 拓扑功能收尾 | Cluster/Sentinel 与新增命令、专用连接组合验收；不重复宣称 C2/C3 已完成 | 待实施 |
 | C7 | TLS | 单独实现 SSLEngine、证书/主机名校验和关闭/重连测试；前置功能验收后开展 | 明确后置 |
@@ -203,3 +203,38 @@ ROLE 本地背压、关闭/取消及外部 Resources。既有 Cluster 与普通�
 
 未验证：Sentinel Redis 5/6.2/Valkey、命名 ACL 用户、跨宿主网络分区、长稳、TLS、JDK 11/25 和其他 OS。
 自动发现更多 Sentinel、事件订阅加速、Replica 读取未提供；当前配置的多个 Sentinel 和周期重发现是基础恢复路径。
+
+## C4 兼容性验收入口与本机记录（2026-09-27）
+
+本阶段不改运行时或公开 API。使用开发/审查 Skill 核对验证边界，保持 Java 8 与核心零外部运行时依赖。
+新增 [兼容性验收指南](../development/compatibility-validation.md) 与
+`scripts/run-compatibility-matrix.sh`：显式 JDK、隔离源码、串行 clean test、逐 JDK 日志和报告留存，
+失败返回非零且不通过自动重跑隐藏失败。每个 JDK 使用独立 build 目录，避免清理失败时混入旧报告。
+
+CI 增加 JDK 25；模拟测试矩阵为 Linux/Intel macOS/Windows × JDK 8/11/17/21/25，
+Linux 独立作业启用 Standalone/Cluster/Sentinel 真实测试。所有作业失败时仍上传报告。
+**本次未触发远端 Actions，配置存在不代表这些平台已验收。**
+
+实际平台：macOS x86_64、Colima；Maven 3.9.6；源码为 `c696ae3` 加本阶段脚本/CI/文档改动。
+本次未更改 core 源码。各组均执行全模块 `mvn clean test` 并开启三个真实服务端测试开关，
+复用现有专用测试容器，未更改其他项目环境。
+
+| JDK | 结果 | 实际服务端范围 |
+| --- | --- | --- |
+| Oracle 8u202 | 105 tests，0 failures/errors/skipped | Redis 5.0.14/6.2.14/7.4.2、Valkey 8.1.3；Redis 7.4.2 Cluster/Sentinel |
+| Temurin 11.0.32.1+1 | 105 tests，0 failures/errors/skipped | 同上 |
+| Oracle 17.0.10 | 105 tests，0 failures/errors/skipped | 同上 |
+| Oracle 21.0.7 | 105 tests，0 failures/errors/skipped | 同上 |
+| JDK 25 | 未运行 | 官方包下载连接超时；不能记为测试失败或通过 |
+
+JDK 11 从 Adoptium 官方 API 返回的地址下载，按其 SHA-256 校验后解包到专用临时目录，
+没有修改系统 JAVA_HOME 或已安装 JDK。JDK 25 下载多次遇到连接超时，保留待验证。
+脚本通过 `sh -n`，非法模式/相对 JDK 路径返回退出码 2；CI YAML 通过本地解析，改动通过 diff 检查。
+
+本机证据目录位于 `$TMPDIR` 下 `boba-straw-compatibility-TB9GHF`（8/17/21）和
+`boba-straw-compatibility-aZxPj2`（11）；均保留逐次报告、环境与源码。前一组运行的是初版执行器，
+三个 JDK 串行 clean 后分别留存报告；后一组验证了最终的逐 JDK 独立 build 目录方案。
+这些临时目录不是永久发布证据，后续发布必须将对应提交的 CI 报告归档。
+
+C4 剩余验收：JDK 25、本次配置的远端平台矩阵；ARM64、长稳、TLS、Boot 版本矩阵不在本次通过范围。
+之后按原顺序进入 C5 命令与二进制接口，不能用此表宣称“完整客户端”或“全平台兼容”。
