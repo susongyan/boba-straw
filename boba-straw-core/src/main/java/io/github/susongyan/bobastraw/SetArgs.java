@@ -74,8 +74,10 @@ public final class SetArgs {
     }
 
     /**
-     * Requests Redis 6.2+ to return the previous value. A null reply means
-     * that an NX/XX condition prevented the write or the key did not exist.
+     * Requests Redis 6.2+ to return the previous value, including when a condition
+     * prevents the write. A null reply means there was no previous string value.
+     * Combining NX with GET requires Redis 7.0+. Do not infer write success from
+     * the returned old value.
      */
     public SetArgs returnOldValue() {
         return new SetArgs(condition, expirationUnit, expiration, keepTtl, true);

@@ -11,7 +11,7 @@ TLS 后置，不再与本轮其他网络能力并行推进。
 | C2 | Cluster 连接与拓扑 | 节点退避重连、周期/事件刷新、故障摘除、MOVED/ASK 和多 Key 策略，真实集群故障测试 | 本文限定普通命令范围已完成 |
 | C3 | Sentinel | 多 Sentinel 发现、认证边界、主节点切换、旧连接处理、明确未知执行结果，真实切换验证 | 本文限定普通命令范围已完成 |
 | C4 | 可用环境的 JDK/平台验证 | 记录实际 JDK/OS/服务端矩阵，其他平台由 CI 验证，不将本机通过泛化 | 本机 8/11/17/21 通过；25 与其他平台待验证，入口已落地 |
-| C5 | 命令和二进制接口 | 用命令开发 Skill 按数据结构分组，完善覆盖清单、返回类型、版本与协议测试 | 待实施 |
+| C5 | 命令和二进制接口 | 用命令开发 Skill 按数据结构分组，完善覆盖清单、返回类型、版本与协议测试 | 进行中：首批二进制 String 接口已实现，其余分组待完成 |
 | C6 | 拓扑功能收尾 | Cluster/Sentinel 与新增命令、专用连接组合验收；不重复宣称 C2/C3 已完成 | 待实施 |
 | C7 | TLS | 单独实现 SSLEngine、证书/主机名校验和关闭/重连测试；前置功能验收后开展 | 明确后置 |
 | C8 | Starter 与发布 | Health、Micrometer、多客户端、配置/生命周期，质量门禁和兼容矩阵；许可证确定后才能发布 | 待实施 |
@@ -238,3 +238,17 @@ JDK 11 从 Adoptium 官方 API 返回的地址下载，按其 SHA-256 校验后�
 
 C4 剩余验收：JDK 25、本次配置的远端平台矩阵；ARM64、长稳、TLS、Boot 版本矩阵不在本次通过范围。
 之后按原顺序进入 C5 命令与二进制接口，不能用此表宣称“完整客户端”或“全平台兼容”。
+
+## C5 分批执行
+
+源码基线 `c82acdf`；执行顺序与接口边界集中记录在
+[命令覆盖清单](command-coverage.md)，避免将 Raw、类型化接口与协议能力混为一谈。
+首批补 Standalone 二进制 String：MGET/MSET/MSETNX、SET 选项、APPEND/STRLEN/GETRANGE/SETRANGE。
+复用既有 CompletionStage、共享连接和取消传播；不增加同步二进制 facade，不更改拓扑入口。
+按命令 Skill 核实官方版本/返回语义，修正 SET GET 的旧注释，并新增编码/边界及真实矩阵测试。
+其余 Key/TTL、Hash/List/Set/ZSet、Scan/Stream/Geo/HLL/Lua、阻塞二进制仍待分组完成。
+
+C5.1 实际验收：macOS x86_64 / Colima，Oracle JDK 8u202 和 21.0.7，
+各 112 tests、0 failures/errors/skipped；真实四服务端 AUTO/RESP2，加原有 Cluster/Sentinel 回归。
+报告与方法边界见覆盖清单。JDK 11/17 本批未重跑，25/其他 OS 仍未验证。
+下一批为 C5.2 Key/TTL 与 String 数值/位操作二进制；C5 整体尚未完成。

@@ -11,7 +11,7 @@
 | Pipeline | 真正批量写，保序但不原子；一次性 builder | NioConnectionIoTest / RedisCompatibilityTest |
 | Pub/Sub | 异步订阅确认，close 发起退订；不是等待全部回调完成的同步屏障 | BobaStrawProtocolNegotiationTest |
 | 事务 helper、懒加载池 | AutoCloseable；取消/失败销毁、成功归还；WATCH 冲突保留空列表兼容行为 | DedicatedConnectionLifecycleTest / DedicatedConnectionCompatibilityTest |
-| String / binary / Lua | 常用命令子集；binary facade 为异步 GET/SET/DEL，其他可用 Raw | RedisCompatibilityTest / RespCodecTest |
+| String / binary / Lua | 常用命令子集；binary 异步 GET/SET/DEL，新增 MGET/MSET/MSETNX、SET 选项、APPEND/STRLEN/GETRANGE/SETRANGE；不等于完整二进制接口 | RedisCompatibilityTest / RespCodecTest / BinaryStringCommandsTest / BinaryStringCompatibilityTest；见[命令覆盖](../implementation/command-coverage.md) |
 | Cluster | 普通主节点命令：多 seed、Slot/Hash Tag、退避重连、周期/事件刷新、MOVED、独占 ASK、已知多 Key 校验；专用命令和生产长稳仍待完成 | ClusterSlotTest / ClusterLifecycleTest / opt-in ClusterIntegrationTest；详见核心收尾计划 |
 | Sentinel | 普通 String Raw 命令、多 Sentinel 发现、独立认证、ROLE 校验、切换和退避重发现；专用组合待完成 | SentinelLifecycleTest / opt-in SentinelIntegrationTest；详见核心收尾计划 |
 | TLS | 未实现，明确后置 | 无 |
