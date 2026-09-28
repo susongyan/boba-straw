@@ -181,7 +181,7 @@ class NioConnectionIoTest {
                 busyReplies.add(busy.execute(new String[] { "PING" }).toCompletableFuture());
             }
             final CompletableFuture<RespValue> busyLast = busyReplies.get(busyCommandCount - 1);
-            healthyReply.whenComplete((value, error) ->
+            CompletableFuture<RespValue> observedHealthyReply = healthyReply.whenComplete((value, error) ->
                 busyLastCompletedWhenHealthyCompleted.set(busyLast.isDone())
             );
 
@@ -209,7 +209,9 @@ class NioConnectionIoTest {
             });
 
             busyServer.allowResponse();
-            assertEquals("PONG", healthyReply.get(2, TimeUnit.SECONDS).asString());
+            // Completion may wake get() before dependent actions have finished. Await the
+            // observer stage itself, otherwise the default true value can fail this test.
+            assertEquals("PONG", observedHealthyReply.get(2, TimeUnit.SECONDS).asString());
             assertNull(callbackFailure.get());
             assertFalse(
                 busyLastCompletedWhenHealthyCompleted.get(),
