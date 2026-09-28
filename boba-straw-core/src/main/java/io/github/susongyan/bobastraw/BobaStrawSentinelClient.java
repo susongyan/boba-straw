@@ -80,6 +80,10 @@ public final class BobaStrawSentinelClient implements AutoCloseable {
         return new BobaStrawAsyncCommands(this::executeAsync);
     }
 
+    public BobaStrawScanCommands scan() {
+        return new BobaStrawScanCommands(this::executeAsync, true);
+    }
+
     /** Ordinary String commands only. Dedicated/stateful operations need a separate topology API. */
     public CompletionStage<RespValue> executeAsync(String command, String... arguments) {
         validateOrdinary(command, arguments);

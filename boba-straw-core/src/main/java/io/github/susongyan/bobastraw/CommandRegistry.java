@@ -43,6 +43,7 @@ final class CommandRegistry {
         describe(specs, CommandSpec.Access.WRITE, "2.0.0", "APPEND");
         describe(specs, CommandSpec.Access.WRITE, "2.6.0", "PEXPIRE PEXPIREAT");
         describe(specs, CommandSpec.Access.READ_ONLY, "2.6.0", "PTTL BITCOUNT");
+        describe(specs, CommandSpec.Access.READ_ONLY, "2.8.0", "SCAN HSCAN SSCAN ZSCAN");
         describe(specs, CommandSpec.Access.WRITE, "4.0.0", "UNLINK");
         describe(specs, CommandSpec.Access.READ_ONLY, "2.0.0", "HGET HMGET HGETALL HEXISTS HLEN ZRANK");
         describe(specs, CommandSpec.Access.WRITE, "2.0.0", "HSET HDEL HINCRBY");

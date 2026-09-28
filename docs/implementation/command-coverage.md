@@ -258,3 +258,43 @@ CMD-03/05/08/09/10/11/12 按本批边界核对；协议解码与 FIFO 未改，�
 JDK 11/17/25、其他 OS、长稳及本批性能压测未运行，临时报告不是永久发布归档。
 尚未覆盖：批量 binary、其余普通方法的批量 typed 包装、Cluster/Sentinel 批量专用组合、
 Scan 页结果、binary/sync 执行统一；C5 仍未整体关闭。
+
+## C5 Skill 同步与 Scan 第三批（2026-09-28）
+
+基线 `5c8c4cc` 加本批工作树。先修正 command-development/usage/review Skill：
+普通 Typed、特殊执行、普通 Raw 的选择；特殊能力可以有 typed 结果，Scan 不因此要求专用连接。
+工作流加入模型复用与游标规则，验收补 CMD-13/14；使用审查补 BSU010/011。
+清理 usage Skill 与审查卡里 Sentinel 一概“未实现”的旧描述，状态统一引用版本能力表。
+
+Skill 校验：Ruby YAML frontmatter 与四个仓库 Skill 的全部 Markdown 引用路径检查通过。
+skill-creator 的 quick_validate.py 已尝试，因本机缺 PyYAML 未完成；临时 venv 安装又被网络代理/TLS
+失败阻断，没有修改系统 Python、关闭证书验证或伪造校验通过。未做独立 Agent/跨模型行为验收。
+
+实现：BobaStrawScanCommands、ScanArgs、ScanPage<T>，三种 Client 新增 scan()。
+Standalone/Sentinel 支持 SCAN/HSCAN/SSCAN/ZSCAN；Cluster 仅单 Key 后三者，数据库 SCAN 本地拒绝。
+仅异步 String、MATCH/COUNT，基础命令元数据补 READ_ONLY/since=2.8.0；不改变重试/连接模式。
+页保留 unsigned 64-bit 字符串游标、重复和空值字符串，空页非终止；Hash/ZSet 使用不可变条目列表。
+不实现 TYPE/NOVALUES、binary Scan、同步 Scan、全库 iterator、Cluster 节点绑定或切换后的游标连续性。
+语义来源与用法见 [命令模型](../architecture/command-model.md)，SCAN 官方总述覆盖 SSCAN 返回与参数语义；
+本轮单独 SSCAN 网页读取失败，不把抓取成功作为实现证明。
+
+测试：ScanCommandsTest 四项覆盖参数顺序/不可变选项、最大 unsigned 游标、空非终止页、重复、
+本地拒绝、取消传播、畸形配对。ScanCompatibilityTest 一项遍历四服务端两协议，
+逐页核对 32 个成员/字段/分值、缺失 Key、MATCH、WRONGTYPE 及后续请求；Cluster/Sentinel
+各新增一项两协议扫描测试，使用 UUID Key 定点清理。测试上限仅为测试保护，不是客户端隐式遍历。
+
+实际验证：
+
+- Java 8 针对性 5 tests 全通过，目录 `/private/tmp/boba-straw-scan-1m830n`。
+- 全模块矩阵 `$TMPDIR/boba-straw-compatibility-SfT9Hb`：JDK 21.0.7 的 141 tests 全通过；
+  JDK 8u202 的 141 tests 中 1 error，为旧 BinaryStringCommandsTest 的
+  preservesMissingEmptyDuplicateAndNonUtf8ResultsInBothProtocols 收到非法 RESP 标记 H，导致可能已执行异常。
+  Scan 新测试全部通过。该轮 Java 8 不能记为全量通过。
+- 在同一失败源码副本单独执行 BinaryStringCommandsTest，5 tests 通过，未复现；没有修改旧测试或放宽断言。
+  现有日志不能确定非法字节来源，根因仍未定位，不把复核通过称为修复。
+  原失败报告已由矩阵脚本保存在 run-1/boba-straw-core/surefire-reports，原 maven.log 保留。
+
+真实兼容范围为 Redis 5.0.14/6.2.14/7.4.2、Valkey 8.1.3 RESP2/AUTO，及 Redis 7.4.2 Cluster/Sentinel；
+未验证分页中途拓扑切换、JDK 11/17/25、其他 OS 或性能/长稳。公共 API 为增量方法/类，
+Java 8 编译与源码兼容复核通过，未运行 japicmp。C5 暂不关闭；除剩余 binary/sync 统一外，
+还需定位上述间歇性测试错误并恢复 Java 8 全量验收证据。

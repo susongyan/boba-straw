@@ -16,6 +16,16 @@ import static org.junit.jupiter.api.Assertions.*;
 @EnabledIfSystemProperty(named = "boba.straw.runSentinel", matches = "true")
 class SentinelIntegrationTest {
     @Test
+    void scanPagesUseDiscoveredPrimary() throws Exception {
+        assertTestContainer();
+        for (ProtocolVersion protocol : new ProtocolVersion[] {ProtocolVersion.RESP2, ProtocolVersion.AUTO}) {
+            try (BobaStrawSentinelClient client = builder(protocol).build()) {
+                ScanCompatibilityTest.verify(client.async(), client.scan(), true);
+            }
+        }
+    }
+
+    @Test
     void typedOrdinaryCommandsUseDiscoveredPrimary() throws Exception {
         assertTestContainer();
         for (ProtocolVersion protocol : new ProtocolVersion[] {ProtocolVersion.RESP2, ProtocolVersion.AUTO}) {

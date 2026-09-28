@@ -68,7 +68,7 @@ graph TD
 | List | LPUSH/RPUSH/LPOP/RPOP/LRANGE/LLEN；BLPOP/BRPOP 继续专用连接 |
 | Set | SADD/SREM/SMEMBERS/SCARD/SISMEMBER；集合间运算暂留 Raw 同 Slot 策略 |
 | ZSet | ZADD/ZREM/ZRANGE/ZSCORE/ZCARD/ZRANK；复杂聚合/新版选项暂留 Raw |
-| Scan | 后续逐页结果对象与 SCAN/HSCAN/SSCAN/ZSCAN，不隐式遍历全库 |
+| Scan | String 异步逐页 SCAN/HSCAN/SSCAN/ZSCAN，不隐式遍历全库；Cluster 仅单 Key 扫描 |
 
 Binary Hash 不使用 Map<byte[], byte[]> 冒充按内容相等的 Map；字段结果采用有序键值条目。
 Binary Set 同理保留字节列表，不宣称 Java 数组按内容去重。ZSet 分值使用可空 Double，排名可空 Long。
@@ -153,3 +153,39 @@ try (BobaStrawTransaction tx = client.transaction()) {
 语义核实：[Redis transactions](https://redis.io/docs/latest/develop/using-commands/transactions/)、
 [Redis pipelining](https://redis.io/docs/latest/develop/using-commands/pipelining/)，2026-09-28。
 EXEC 执行期单条错误不阻止其他命令，Redis 不回滚；Pipeline 是减少往返，不提供事务隔离。
+
+### Scan typed 分页（2026-09-28，第三批）
+
+三种 Client 新增 `scan()`，返回特殊能力入口 BobaStrawScanCommands；它仍复用共享连接和
+TypedCommand/CommandExecutor，不创建专用连接、全库缓存或后台遍历任务。
+每次 scan/hscan/sscan/zscan 请求返回一个 CompletionStage<ScanPage<T>>，取消传播到该页请求。
+
+- ScanArgs 不可变，支持 MATCH 与正数 COUNT；没有 TYPE、NOVALUES 等新版选项。
+- ScanPage 提供 cursor()/values()/isFinished()；游标用字符串承载 unsigned 64-bit，不按 long 截断。
+- SCAN/SSCAN 返回 String；HSCAN 返回 List 中的不可变 field/value Entry；ZSCAN 返回 member/Double Entry。
+  页列表只读，保留重复与空字符串，不自行去重。空页不等于结束，COUNT 不保证返回数量。
+- Standalone/Sentinel 支持四种扫描；Cluster 仅 HSCAN/SSCAN/ZSCAN 按 Key 路由。
+  无节点绑定的 Cluster scan().scan(...) 本地拒绝，不能把一次随机主节点 SCAN 包装成全库遍历。
+- 分页间 Sentinel 切换或 Cluster 迁移不提供游标连续性保证；调用方应结合业务容错处理，客户端不自动重启扫描。
+- 本批仅异步 String，不提供 binary、同步专用 facade、自动 iterator/stream 或批量 Scan 包装。
+
+```java
+String cursor = "0";
+do {
+    ScanPage<String> page = client.scan()
+        .sscan("members", cursor, ScanArgs.none().count(100))
+        .toCompletableFuture().get();
+    for (String member : page.values()) {
+        // Process members; repeated values are possible.
+    }
+    if (page.isFinished()) {
+        break;
+    }
+    cursor = page.cursor();
+} while (true);
+```
+
+SCAN 系列和 MATCH/COUNT 适用 Redis 5 基线（命令自 2.8 起）；原协议协商与不重试策略不变。
+语义来源：[SCAN](https://redis.io/docs/latest/commands/scan/)、
+[HSCAN](https://redis.io/docs/latest/commands/hscan/)、[ZSCAN](https://redis.io/docs/latest/commands/zscan/)，
+核实日期 2026-09-28。SCAN 官方总述同时说明 SSCAN 的游标、成员返回与 COUNT 语义。

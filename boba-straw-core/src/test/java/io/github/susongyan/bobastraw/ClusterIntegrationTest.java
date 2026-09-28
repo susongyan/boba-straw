@@ -16,6 +16,16 @@ import static org.junit.jupiter.api.Assertions.*;
 @EnabledIfSystemProperty(named = "boba.straw.runCluster", matches = "true")
 class ClusterIntegrationTest {
     @Test
+    void keyBoundScansFollowSlotRouting() throws Exception {
+        assertTestContainer();
+        for (ProtocolVersion protocol : new ProtocolVersion[] {ProtocolVersion.RESP2, ProtocolVersion.AUTO}) {
+            try (BobaStrawClusterClient client = cluster(protocol)) {
+                ScanCompatibilityTest.verify(client.async(), client.scan(), false);
+            }
+        }
+    }
+
+    @Test
     void typedOrdinaryCommandsReuseRoutingAndDecoders() throws Exception {
         assertTestContainer();
         for (ProtocolVersion protocol : new ProtocolVersion[] {ProtocolVersion.RESP2, ProtocolVersion.AUTO}) {

@@ -101,6 +101,10 @@ public final class BobaStrawClient implements AutoCloseable {
         return async;
     }
 
+    public BobaStrawScanCommands scan() {
+        return new BobaStrawScanCommands(this::executeAsync, true);
+    }
+
     public BobaStrawBinaryCommands binary() {
         return new BobaStrawBinaryCommands(this);
     }

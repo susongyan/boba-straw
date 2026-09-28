@@ -12,7 +12,8 @@
 | Pub/Sub | 异步订阅确认，close 发起退订；不是等待全部回调完成的同步屏障 | BobaStrawProtocolNegotiationTest |
 | 事务 helper、懒加载池 | AutoCloseable；取消/失败销毁、成功归还；typed() / execTyped() 区分 WATCH abort，Raw exec() 保留空列表兼容行为 | DedicatedConnectionLifecycleTest / DedicatedConnectionCompatibilityTest / TypedBatchCompatibilityTest |
 | 高频 String / binary / Lua | String/Key/TTL/Counter/Bit、Hash/List/Set/ZSet 高频普通命令；String sync/async 和 binary async；Lua 仍为 String EVAL，非全命令全选项 | RedisCompatibilityTest / BinaryStringCommandsTest / BinaryStringCompatibilityTest / HighFrequencyCommandsCompatibilityTest；见[命令覆盖](../implementation/command-coverage.md) |
-| 命令元数据 / 三层入口 | 共用 Key 规则与连接模式；已知状态型/阻塞命令不能经共享 Raw/Pipeline 绕过；Scan typed 页结果仍待完成 | CommandModelTest；见[设计](../architecture/command-model.md) |
+| 命令元数据 / 三层入口 | 共用 Key 规则与连接模式；已知状态型/阻塞命令不能经共享 Raw/Pipeline 绕过 | CommandModelTest；见[设计](../architecture/command-model.md) |
+| Scan typed 页结果 | scan() 特殊入口；异步 String SCAN/HSCAN/SSCAN/ZSCAN、MATCH/COUNT；Cluster 仅单 Key 扫描，不提供全库迭代 | ScanCommandsTest / ScanCompatibilityTest / ClusterIntegrationTest / SentinelIntegrationTest |
 | Cluster | 普通 String async typed 与 Raw；多 seed、Slot/Hash Tag、退避重连、周期/事件刷新、MOVED、独占 ASK、已知多 Key 校验；专用命令和生产长稳仍待完成 | TypedCommandExecutionTest / ClusterSlotTest / ClusterLifecycleTest / opt-in ClusterIntegrationTest；详见核心收尾计划 |
 | Sentinel | 普通 String async typed 与 Raw、多 Sentinel 发现、独立认证、ROLE 校验、切换和退避重发现；专用组合待完成 | TypedCommandExecutionTest / SentinelLifecycleTest / opt-in SentinelIntegrationTest；详见核心收尾计划 |
 | TLS | 未实现，明确后置 | 无 |

@@ -89,6 +89,11 @@ public final class BobaStrawClusterClient implements AutoCloseable {
         return new BobaStrawAsyncCommands(this::executeAsync);
     }
 
+    /** Key-bound scans only; database SCAN is rejected by this facade. */
+    public BobaStrawScanCommands scan() {
+        return new BobaStrawScanCommands(this::executeAsync, false);
+    }
+
     public CompletionStage<RespValue> executeAsync(String command, String... arguments) {
         return execute(ClusterCommandRouting.slot(command, arguments), command, arguments);
     }
