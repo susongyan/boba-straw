@@ -160,6 +160,9 @@ graph TD
 ## 连接所有权
 
 业务线程只能创建不可变命令帧，并提交以下任务：发送、取消、关闭。
+binary typed 路径将参数直接编码为 internal EncodedCommand；只读 ByteBuffer 不暴露底层数组，
+每个请求独占自己的 position/limit，与其他路径汇入相同的准入、排队和写入逻辑。
+该对象不授权命令、不绕过普通命令元数据检查，也不创建重试路径。
 `outbound`、`pending`、`SelectionKey`、协议 decoder、握手状态、空闲 PING
 状态和 deadline 只能由所属 EventLoop 读写。
 

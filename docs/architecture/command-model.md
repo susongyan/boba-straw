@@ -212,3 +212,19 @@ binary 方法一致地本地抛 IllegalArgumentException；合法空字节 key/v
 
 仍不包含 Cluster/Sentinel binary/sync facade、binary Scan/batch；这些不由内部收口自动获得。
 C5 最终退出审查与历史非法 H 根因追踪继续保留，不能把本批测试通过等同问题已修复。
+
+### Binary 帧所有权优化（2026-09-28，第五批）
+
+第四批的两层参数快照与执行器防御副本是历史实现。现在 binary TypedCommand 先执行同一
+CommandRegistry 准入校验，再调用既有 RESP encoder 一次生成 EncodedCommand；不再保留两份
+原始参数。EncodedCommand 是 internal 包的不可变传输对象，构造时立即编码，底层数组私有，
+仅提供只读 ByteBuffer，且每次获取有独立 position/limit。调用方返回后修改原始数组不影响 wire。
+调用期间仍不得从其他线程并发修改传入参数。
+
+BinaryCommandExecutor 接收该帧而非复制后的 byte[][]；Client 包内入口直接交给 NioConnection，
+复用既有 callback/connection capacity、请求 deadline、取消 drain 与 FIFO，既不二次编码也不绕过准入。
+普通 Raw binary 路径不变。EncodedCommand 自身不是普通命令授权器，不能用于业务绕过 Client；
+public 可见性只用于 core 的父包与 internal 子包协作，不作为稳定扩展 SPI。
+
+这是应用参数到库内 wire 帧的一次 payload 复制，不是“零拷贝”：JDK/socket/OS/服务端仍可能复制。
+本轮性能证据与功能退出核对见 [C5 收尾审查](../implementation/c5-exit-review.md)。

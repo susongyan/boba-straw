@@ -1,0 +1,237 @@
+diff --git a/boba-straw-core/src/main/java/io/github/susongyan/bobastraw/BinaryCommandExecutor.java b/boba-straw-core/src/main/java/io/github/susongyan/bobastraw/BinaryCommandExecutor.java
+index 66050f6..e85b7d3 100644
+--- a/boba-straw-core/src/main/java/io/github/susongyan/bobastraw/BinaryCommandExecutor.java
++++ b/boba-straw-core/src/main/java/io/github/susongyan/bobastraw/BinaryCommandExecutor.java
+@@ -4 +4 @@ import io.github.susongyan.bobastraw.protocol.RespValue;
+-import java.nio.charset.StandardCharsets;
++import io.github.susongyan.bobastraw.internal.EncodedCommand;
+@@ -10 +10 @@ interface BinaryCommandExecutor {
+-    CompletionStage<RespValue> executeAsync(byte[] command, byte[]... arguments);
++    CompletionStage<RespValue> executeAsync(EncodedCommand command);
+@@ -14 +14 @@ interface BinaryCommandExecutor {
+-            executeAsync(command.name().getBytes(StandardCharsets.US_ASCII), command.binaryArguments()),
++            executeAsync(command.binaryFrame()),
+diff --git a/boba-straw-core/src/main/java/io/github/susongyan/bobastraw/BobaStrawBinaryCommands.java b/boba-straw-core/src/main/java/io/github/susongyan/bobastraw/BobaStrawBinaryCommands.java
+index d2bd24c..ffd8992 100644
+--- a/boba-straw-core/src/main/java/io/github/susongyan/bobastraw/BobaStrawBinaryCommands.java
++++ b/boba-straw-core/src/main/java/io/github/susongyan/bobastraw/BobaStrawBinaryCommands.java
+@@ -12 +12 @@ public final class BobaStrawBinaryCommands {
+-        this((name, arguments) -> client.executeBinaryAsync(name, arguments));
++        this(command -> client.executeEncodedCommand(command));
+diff --git a/boba-straw-core/src/main/java/io/github/susongyan/bobastraw/BobaStrawClient.java b/boba-straw-core/src/main/java/io/github/susongyan/bobastraw/BobaStrawClient.java
+index a8da771..4066bea 100644
+--- a/boba-straw-core/src/main/java/io/github/susongyan/bobastraw/BobaStrawClient.java
++++ b/boba-straw-core/src/main/java/io/github/susongyan/bobastraw/BobaStrawClient.java
+@@ -204,0 +205,7 @@ public final class BobaStrawClient implements AutoCloseable {
++    /** Package-only typed path: TypedCommand has already applied the ordinary-command policy. */
++    CompletionStage<RespValue> executeEncodedCommand(
++        io.github.susongyan.bobastraw.internal.EncodedCommand command
++    ) {
++        return sharedConnection().executeEncodedCommand(command);
++    }
++
+diff --git a/boba-straw-core/src/main/java/io/github/susongyan/bobastraw/TypedCommand.java b/boba-straw-core/src/main/java/io/github/susongyan/bobastraw/TypedCommand.java
+index 8639eef..f199c98 100644
+--- a/boba-straw-core/src/main/java/io/github/susongyan/bobastraw/TypedCommand.java
++++ b/boba-straw-core/src/main/java/io/github/susongyan/bobastraw/TypedCommand.java
+@@ -2,0 +3,3 @@ package io.github.susongyan.bobastraw;
++import io.github.susongyan.bobastraw.internal.EncodedCommand;
++import java.nio.charset.StandardCharsets;
++
+@@ -7 +10 @@ final class TypedCommand<T> {
+-    private final byte[][] binaryArguments;
++    private final EncodedCommand binaryFrame;
+@@ -17 +20 @@ final class TypedCommand<T> {
+-        this.binaryArguments = null;
++        this.binaryFrame = null;
+@@ -28 +31,4 @@ final class TypedCommand<T> {
+-        this.binaryArguments = copy(arguments);
++        byte[][] all = new byte[arguments.length + 1][];
++        all[0] = this.name.getBytes(StandardCharsets.US_ASCII);
++        System.arraycopy(arguments, 0, all, 1, arguments.length);
++        this.binaryFrame = new EncodedCommand(all);
+@@ -47,2 +53,2 @@ final class TypedCommand<T> {
+-    byte[][] binaryArguments() {
+-        if (binaryArguments == null) {
++    EncodedCommand binaryFrame() {
++        if (binaryFrame == null) {
+@@ -51,9 +57 @@ final class TypedCommand<T> {
+-        return copy(binaryArguments);
+-    }
+-
+-    private static byte[][] copy(byte[][] values) {
+-        byte[][] result = new byte[values.length][];
+-        for (int index = 0; index < values.length; index++) {
+-            result[index] = values[index].clone();
+-        }
+-        return result;
++        return binaryFrame;
+diff --git a/boba-straw-core/src/main/java/io/github/susongyan/bobastraw/internal/NioConnection.java b/boba-straw-core/src/main/java/io/github/susongyan/bobastraw/internal/NioConnection.java
+index beb1eea..d37ba37 100644
+--- a/boba-straw-core/src/main/java/io/github/susongyan/bobastraw/internal/NioConnection.java
++++ b/boba-straw-core/src/main/java/io/github/susongyan/bobastraw/internal/NioConnection.java
+@@ -288,0 +289,5 @@ public final class NioConnection implements AutoCloseable {
++    /** Internal pre-encoded path; uses the same admission, cancellation and callback lifecycle. */
++    public CompletionStage<RespValue> executeEncodedCommand(EncodedCommand command) {
++        return executeExternal(command.buffer());
++    }
++
+@@ -376 +381,5 @@ public final class NioConnection implements AutoCloseable {
+-        ConnectionCapacity.Reservation capacityReservation = reserveCapacity(encoded.length);
++        return executeExternal(ByteBuffer.wrap(encoded));
++    }
++
++    private CompletionStage<RespValue> executeExternal(ByteBuffer encoded) {
++        ConnectionCapacity.Reservation capacityReservation = reserveCapacity(encoded.remaining());
+@@ -387 +396 @@ public final class NioConnection implements AutoCloseable {
+-        return exposeToCaller(enqueueExternal(encoded, capacityReservation), reservation);
++        return exposeToCaller(enqueueExternal(encoded, capacityReservation, null), reservation);
+@@ -806 +815,8 @@ public final class NioConnection implements AutoCloseable {
+-        final Request request = new Request(ByteBuffer.wrap(encoded), capacityReservation);
++        return newRequest(ByteBuffer.wrap(encoded), capacityReservation);
++    }
++
++    private Request newRequest(
++        ByteBuffer encoded,
++        ConnectionCapacity.Reservation capacityReservation
++    ) {
++        final Request request = new Request(encoded, capacityReservation);
+@@ -826,0 +843,8 @@ public final class NioConnection implements AutoCloseable {
++    ) {
++        return enqueueExternal(ByteBuffer.wrap(encoded), capacityReservation, pushCompletionBarrier);
++    }
++
++    private Request enqueueExternal(
++        ByteBuffer encoded,
++        ConnectionCapacity.Reservation capacityReservation,
++        Runnable pushCompletionBarrier
+diff --git a/boba-straw-core/src/test/java/io/github/susongyan/bobastraw/BinaryStringCommandsTest.java b/boba-straw-core/src/test/java/io/github/susongyan/bobastraw/BinaryStringCommandsTest.java
+index 812acb4..f6936ab 100644
+--- a/boba-straw-core/src/test/java/io/github/susongyan/bobastraw/BinaryStringCommandsTest.java
++++ b/boba-straw-core/src/test/java/io/github/susongyan/bobastraw/BinaryStringCommandsTest.java
+@@ -23,0 +24,44 @@ class BinaryStringCommandsTest {
++    @Test
++    void encodedLargeValueSurvivesCallerMutationAndMultipleWriteBudgets() throws Exception {
++        byte[] value = new byte[131072];
++        java.util.Arrays.fill(value, (byte) 0xfe);
++        byte[] expected = value.clone();
++        byte[] key = KEY.clone();
++        CountDownLatch read = new CountDownLatch(1);
++        try (Server server = new Server(socket -> {
++            assertTrue(read.await(3, TimeUnit.SECONDS));
++            exchange(socket, "+OK\r\n", ascii("SET"), KEY, expected);
++            exchange(socket, ":131072\r\n", ascii("STRLEN"), KEY);
++        }); BobaStrawClient client = client(server)) {
++            try {
++                CompletionStage<byte[]> set = client.binary().set(key, value);
++                java.util.Arrays.fill(value, (byte) 'H');
++                java.util.Arrays.fill(key, (byte) 'H');
++                CompletionStage<Long> next = client.binary().strlen(KEY);
++                read.countDown();
++                assertArrayEquals(ascii("OK"), await(set));
++                assertEquals(Long.valueOf(131072), await(next));
++                server.verify();
++            } finally {
++                read.countDown();
++            }
++        }
++    }
++
++    @Test
++    void encodedFrameStillHonorsQueuedByteAdmissionBeforeWriting() throws Exception {
++        try (Server server = new Server(socket -> exchange(socket, "$-1\r\n", ascii("GET"), KEY));
++             BobaStrawClient client = BobaStrawClient.builder()
++                 .endpoint("127.0.0.1", server.listener.getLocalPort()).protocol(ProtocolVersion.RESP2)
++                 .commandTimeout(Duration.ofSeconds(3))
++                 .connectionLimits(BobaStrawConnectionLimits.builder().maxQueuedWriteBytes(64).build())
++                 .build()) {
++            java.util.concurrent.ExecutionException failure = assertThrows(
++                java.util.concurrent.ExecutionException.class,
++                () -> await(client.binary().set(KEY, new byte[128])));
++            assertTrue(failure.getCause() instanceof BobaStrawBackpressureException);
++            assertNull(await(client.binary().get(KEY)));
++            server.verify();
++        }
++    }
++
+diff --git a/boba-straw-core/src/test/java/io/github/susongyan/bobastraw/TypedCommandExecutionTest.java b/boba-straw-core/src/test/java/io/github/susongyan/bobastraw/TypedCommandExecutionTest.java
+index faf7636..27bcf2d 100644
+--- a/boba-straw-core/src/test/java/io/github/susongyan/bobastraw/TypedCommandExecutionTest.java
++++ b/boba-straw-core/src/test/java/io/github/susongyan/bobastraw/TypedCommandExecutionTest.java
+@@ -3,0 +4,4 @@ import io.github.susongyan.bobastraw.protocol.RespValue;
++import io.github.susongyan.bobastraw.protocol.RespCodec;
++import io.github.susongyan.bobastraw.internal.EncodedCommand;
++import java.nio.ByteBuffer;
++import java.nio.ReadOnlyBufferException;
+@@ -11,0 +16,12 @@ class TypedCommandExecutionTest {
++    private static RespValue.Array decode(EncodedCommand command) {
++        ByteBuffer buffer = command.buffer();
++        byte[] bytes = new byte[buffer.remaining()];
++        buffer.get(bytes);
++        RespCodec.Decoder decoder = new RespCodec.Decoder();
++        decoder.feed(bytes, bytes.length);
++        RespValue.Array result = (RespValue.Array) decoder.poll();
++        assertNotNull(result);
++        assertNull(decoder.poll());
++        return result;
++    }
++
+@@ -18,3 +34,7 @@ class TypedCommandExecutionTest {
+-        byte[][] exposed = command.binaryArguments();
+-        exposed[0][1] = 3;
+-        exposed[1] = new byte[] {4};
++        ByteBuffer exposed = command.binaryFrame().buffer();
++        assertTrue(exposed.isReadOnly());
++        assertThrows(ReadOnlyBufferException.class, () -> exposed.put(0, (byte) 3));
++        assertThrows(ReadOnlyBufferException.class, exposed::array);
++        exposed.position(exposed.limit());
++        assertEquals(0, command.binaryFrame().buffer().position());
++        RespValue.Array encoded = decode(command.binaryFrame());
+@@ -22,2 +42,3 @@ class TypedCommandExecutionTest {
+-        assertArrayEquals(new byte[] {(byte) 0xff, 0}, command.binaryArguments()[0]);
+-        assertArrayEquals(new byte[0], command.binaryArguments()[1]);
++        assertEquals("SET", encoded.values.get(0).asString());
++        assertArrayEquals(new byte[] {(byte) 0xff, 0}, CommandDecoders.BYTES.apply(encoded.values.get(1)));
++        assertArrayEquals(new byte[0], CommandDecoders.BYTES.apply(encoded.values.get(2)));
+@@ -28 +49 @@ class TypedCommandExecutionTest {
+-        BinaryCommandExecutor binary = (name, args) -> {
++        BinaryCommandExecutor binary = frame -> {
+@@ -49 +70 @@ class TypedCommandExecutionTest {
+-        BobaStrawBinaryCommands commands = BobaStrawBinaryCommands.withExecutor((name, args) -> {
++        BobaStrawBinaryCommands commands = BobaStrawBinaryCommands.withExecutor(frame -> {
+@@ -51,2 +72,3 @@ class TypedCommandExecutionTest {
+-            assertArrayEquals(new byte[] {'G', 'E', 'T'}, name);
+-            assertArrayEquals(new byte[] {(byte) 0xff, 0}, args[0]);
++            RespValue.Array encoded = decode(frame);
++            assertEquals("GET", encoded.values.get(0).asString());
++            assertArrayEquals(new byte[] {(byte) 0xff, 0}, CommandDecoders.BYTES.apply(encoded.values.get(1)));
+@@ -61 +83 @@ class TypedCommandExecutionTest {
+-        BobaStrawBinaryCommands failing = BobaStrawBinaryCommands.withExecutor((name, args) -> {
++        BobaStrawBinaryCommands failing = BobaStrawBinaryCommands.withExecutor(frame -> {
+@@ -75 +97 @@ class TypedCommandExecutionTest {
+-        BobaStrawBinaryCommands commands = BobaStrawBinaryCommands.withExecutor((name, args) -> {
++        BobaStrawBinaryCommands commands = BobaStrawBinaryCommands.withExecutor(frame -> {
+diff --git a/boba-straw-core/src/main/java/io/github/susongyan/bobastraw/internal/EncodedCommand.java b/boba-straw-core/src/main/java/io/github/susongyan/bobastraw/internal/EncodedCommand.java
+new file mode 100644
+index 0000000..03d062b
+--- /dev/null
++++ b/boba-straw-core/src/main/java/io/github/susongyan/bobastraw/internal/EncodedCommand.java
+@@ -0,0 +1,18 @@
++package io.github.susongyan.bobastraw.internal;
++
++import io.github.susongyan.bobastraw.protocol.RespCodec;
++import java.nio.ByteBuffer;
++
++/** Internal immutable wire snapshot. This type does not authorize a command or implement retries. */
++public final class EncodedCommand {
++    private final byte[] frame;
++
++    public EncodedCommand(byte[][] command) {
++        frame = RespCodec.encodeCommand(command);
++    }
++
++    /** Each request owns its position/limit; neither content nor backing array can be modified. */
++    public ByteBuffer buffer() {
++        return ByteBuffer.wrap(frame).asReadOnlyBuffer();
++    }
++}

@@ -1,0 +1,13 @@
+Mon Sep 28 09:46:57 UTC 2026
+Darwin sus-mac.local 24.4.0 Darwin Kernel Version 24.4.0: Fri Apr 11 18:28:23 PDT 2025; root:xnu-11417.101.15~117/RELEASE_X86_64 x86_64
+java version "21.0.7" 2025-04-15 LTS
+Java(TM) SE Runtime Environment (build 21.0.7+8-LTS-245)
+Java HotSpot(TM) 64-Bit Server VM (build 21.0.7+8-LTS-245, mixed mode, sharing)
+benchmark_host_logical_cpus=8
+benchmark_host_load_1m=22.33
+benchmark_host_load_per_cpu=2.791
+benchmark_host_max_load_per_cpu=0
+benchmark_host_load_check=disabled
+1d6b4bcaf3fe6cdef163ec8192f427983fc47ae6c061aba6fcdef3aa1a668c17  /private/tmp/boba-straw-c5-ab-uSfXF0/baseline/boba-straw-core/target/boba-straw-core-0.1.0-SNAPSHOT.jar
+f993516fc0717f287b2270aca40cef24dc8e44cb35e606c9b9b57361bb5aefe5  /private/tmp/boba-straw-c5-ab-uSfXF0/candidate/boba-straw-core/target/boba-straw-core-0.1.0-SNAPSHOT.jar
+649794e1925ac98aced640815bd15be61a3b16ffd1732e2d35a03ee4dfc98347  /private/tmp/boba-straw-c5-ab-uSfXF0/baseline/boba-straw-benchmarks/target/benchmarks-harness.jar

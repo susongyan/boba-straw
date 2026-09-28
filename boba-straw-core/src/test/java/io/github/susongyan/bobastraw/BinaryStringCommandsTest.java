@@ -22,6 +22,50 @@ class BinaryStringCommandsTest {
     private static final byte[] VALUE = {(byte) 0xfe, 0};
 
     @Test
+    void encodedLargeValueSurvivesCallerMutationAndMultipleWriteBudgets() throws Exception {
+        byte[] value = new byte[131072];
+        java.util.Arrays.fill(value, (byte) 0xfe);
+        byte[] expected = value.clone();
+        byte[] key = KEY.clone();
+        CountDownLatch read = new CountDownLatch(1);
+        try (Server server = new Server(socket -> {
+            assertTrue(read.await(3, TimeUnit.SECONDS));
+            exchange(socket, "+OK\r\n", ascii("SET"), KEY, expected);
+            exchange(socket, ":131072\r\n", ascii("STRLEN"), KEY);
+        }); BobaStrawClient client = client(server)) {
+            try {
+                CompletionStage<byte[]> set = client.binary().set(key, value);
+                java.util.Arrays.fill(value, (byte) 'H');
+                java.util.Arrays.fill(key, (byte) 'H');
+                CompletionStage<Long> next = client.binary().strlen(KEY);
+                read.countDown();
+                assertArrayEquals(ascii("OK"), await(set));
+                assertEquals(Long.valueOf(131072), await(next));
+                server.verify();
+            } finally {
+                read.countDown();
+            }
+        }
+    }
+
+    @Test
+    void encodedFrameStillHonorsQueuedByteAdmissionBeforeWriting() throws Exception {
+        try (Server server = new Server(socket -> exchange(socket, "$-1\r\n", ascii("GET"), KEY));
+             BobaStrawClient client = BobaStrawClient.builder()
+                 .endpoint("127.0.0.1", server.listener.getLocalPort()).protocol(ProtocolVersion.RESP2)
+                 .commandTimeout(Duration.ofSeconds(3))
+                 .connectionLimits(BobaStrawConnectionLimits.builder().maxQueuedWriteBytes(64).build())
+                 .build()) {
+            java.util.concurrent.ExecutionException failure = assertThrows(
+                java.util.concurrent.ExecutionException.class,
+                () -> await(client.binary().set(KEY, new byte[128])));
+            assertTrue(failure.getCause() instanceof BobaStrawBackpressureException);
+            assertNull(await(client.binary().get(KEY)));
+            server.verify();
+        }
+    }
+
+    @Test
     void encodesOptionsPairsAndOffsetsWithoutConvertingPayloads() throws Exception {
         try (Server server = new Server(socket -> {
             exchange(socket, "+OK\r\n", ascii("SET"), KEY, VALUE, ascii("NX"), ascii("PX"), ascii("30"));

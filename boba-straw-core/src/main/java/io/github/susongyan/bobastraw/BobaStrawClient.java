@@ -202,6 +202,13 @@ public final class BobaStrawClient implements AutoCloseable {
         return sharedConnection().execute(all);
     }
 
+    /** Package-only typed path: TypedCommand has already applied the ordinary-command policy. */
+    CompletionStage<RespValue> executeEncodedCommand(
+        io.github.susongyan.bobastraw.internal.EncodedCommand command
+    ) {
+        return sharedConnection().executeEncodedCommand(command);
+    }
+
     private synchronized NioConnection sharedConnection() {
         ensureClientOpen();
         return connection;

@@ -16,8 +16,8 @@ Cluster/Sentinel 仅 String Raw 普通命令，不存在可直接复用的二进
 | C5.1 | Standalone 二进制 String 批量、SET 选项、字节范围 | 本批实现，验证记录见下 |
 | C5.2 | Key/TTL、Counter、Bit 高频二进制接口 | 本批已实现，按下方记录验收 |
 | C5.3 | Hash/List/Set/ZSet 高频普通命令及二进制接口 | 本批已实现冻结清单，非所有命令/选项 |
-| C5.4 | 命令元数据化 | 注册表已用于路由和入口策略，新方法复用 decoder；复杂选项/旧 mapper 迁移仍有限定 |
-| C5.5 | Typed / 特殊能力 / Raw 三层边界 | 入口限制已落地；Scan 类型化页结果、拓扑与特殊能力组合尚待完成 |
+| C5.4 | 命令元数据化 | 注册表用于路由与入口策略；普通 String sync/async、binary async 已消费 typed 模型；复杂选项元数据仍有限定 |
+| C5.5 | Typed / 特殊能力 / Raw 三层边界 | 入口限制、String typed Pipeline/事务与 Scan 页模型已落地；拓扑专用组合留 C6 |
 | C6 | Cluster/Sentinel 类型化、二进制与专用连接组合 | 按核心计划后续验收，不能通过 UTF-8 转换二进制 Key 绕过 |
 
 ## C5.1 新增接口
@@ -339,3 +339,19 @@ JDK 8u202 与 21.0.7 各 145 tests，0 failures/errors/skipped，全部模块构
 输入与执行器参数防御副本增加复制成本，旧网络性能报告不覆盖本次版本。
 剩余：C5 最终退出审查、复制成本优化/重测与历史非法 H 根因追踪；
 Cluster/Sentinel binary/sync、binary Scan/batch 不在本批交付范围。
+
+### Binary 不可变帧与 C5 收尾核对（2026-09-28）
+
+基线 `c49bcdf`：binary typed 普通命令直接创建不可变 EncodedCommand，去掉参数快照与执行器
+副本两轮 payload 复制；元数据校验先行，传输继续复用原准入/FIFO/取消/回调路径，无二次编码。
+测试新增大值超过写预算、调用返回后修改原数组、预编码帧背压零发送；只读 frame 与游标隔离
+也纳入 TypedCommandExecutionTest。公开 Client/Binary/Sync JVM 签名与上一批一致。
+
+Java 8 针对性 25 tests 全通过；根全模块真实兼容矩阵 JDK 8u202/21.0.7 各 147 tests 全通过，
+0 failures/errors/skipped，证据 `$TMPDIR/boba-straw-compatibility-e9HETy`。
+服务端/协议/拓扑范围同上一批，源码副本已核对。没有修改协议 decoder，也未关闭历史 H 根因问题。
+
+JDK 21 Redis 7.4.2 短程分配量 ABBA 完成；1 MiB SET 平均约 3.15 MB/op → 1.05 MB/op。
+主机高负载，正式预检失败记录保留；随后明确仅作分配量诊断，不能作吞吐/延迟提升证据。
+详见 [性能原始证据](../benchmarks/results/20260928-c5-binary-frame-diagnostic/summary.md)。
+冻结功能的验收映射和剩余限制见 [C5 收尾审查](c5-exit-review.md)，不等于全 Redis 命令或生产风险清零。

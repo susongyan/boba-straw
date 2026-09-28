@@ -286,6 +286,11 @@ public final class NioConnection implements AutoCloseable {
         return executeExternal(RespCodec.encodeCommand(command));
     }
 
+    /** Internal pre-encoded path; uses the same admission, cancellation and callback lifecycle. */
+    public CompletionStage<RespValue> executeEncodedCommand(EncodedCommand command) {
+        return executeExternal(command.buffer());
+    }
+
     /**
      * Executes an application command and completes on the EventLoop after Redis replies.
      *
@@ -373,7 +378,11 @@ public final class NioConnection implements AutoCloseable {
     }
 
     private CompletionStage<RespValue> executeExternal(byte[] encoded) {
-        ConnectionCapacity.Reservation capacityReservation = reserveCapacity(encoded.length);
+        return executeExternal(ByteBuffer.wrap(encoded));
+    }
+
+    private CompletionStage<RespValue> executeExternal(ByteBuffer encoded) {
+        ConnectionCapacity.Reservation capacityReservation = reserveCapacity(encoded.remaining());
         if (capacityReservation == null) {
             return connectionBackpressure("Redis command was not sent");
         }
@@ -384,7 +393,7 @@ public final class NioConnection implements AutoCloseable {
                 "Boba Straw callback capacity is exhausted; Redis command was not sent"
             ));
         }
-        return exposeToCaller(enqueueExternal(encoded, capacityReservation), reservation);
+        return exposeToCaller(enqueueExternal(encoded, capacityReservation, null), reservation);
     }
 
     private CompletionStage<RespValue> executeTransportExternal(byte[] encoded) {
@@ -803,7 +812,14 @@ public final class NioConnection implements AutoCloseable {
         byte[] encoded,
         ConnectionCapacity.Reservation capacityReservation
     ) {
-        final Request request = new Request(ByteBuffer.wrap(encoded), capacityReservation);
+        return newRequest(ByteBuffer.wrap(encoded), capacityReservation);
+    }
+
+    private Request newRequest(
+        ByteBuffer encoded,
+        ConnectionCapacity.Reservation capacityReservation
+    ) {
+        final Request request = new Request(encoded, capacityReservation);
         request.future.whenComplete((value, error) -> {
             NioEventLoop.ScheduledTask deadline = request.deadline;
             if (deadline != null) {
@@ -822,6 +838,14 @@ public final class NioConnection implements AutoCloseable {
 
     private Request enqueueExternal(
         byte[] encoded,
+        ConnectionCapacity.Reservation capacityReservation,
+        Runnable pushCompletionBarrier
+    ) {
+        return enqueueExternal(ByteBuffer.wrap(encoded), capacityReservation, pushCompletionBarrier);
+    }
+
+    private Request enqueueExternal(
+        ByteBuffer encoded,
         ConnectionCapacity.Reservation capacityReservation,
         Runnable pushCompletionBarrier
     ) {

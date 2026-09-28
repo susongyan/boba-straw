@@ -1,10 +1,13 @@
 package io.github.susongyan.bobastraw;
 
+import io.github.susongyan.bobastraw.internal.EncodedCommand;
+import java.nio.charset.StandardCharsets;
+
 /** Immutable ordinary text or binary invocation. Not a public extension SPI or a retry instruction. */
 final class TypedCommand<T> {
     private final String name;
     private final String[] arguments;
-    private final byte[][] binaryArguments;
+    private final EncodedCommand binaryFrame;
     private final CommandDecoder<T> decoder;
 
     TypedCommand(String name, CommandDecoder<T> decoder, String... arguments) {
@@ -14,7 +17,7 @@ final class TypedCommand<T> {
             throw new IllegalArgumentException("Command decoder is required");
         }
         this.arguments = arguments.clone();
-        this.binaryArguments = null;
+        this.binaryFrame = null;
         this.decoder = decoder;
     }
 
@@ -25,7 +28,10 @@ final class TypedCommand<T> {
             throw new IllegalArgumentException("Command decoder is required");
         }
         this.arguments = null;
-        this.binaryArguments = copy(arguments);
+        byte[][] all = new byte[arguments.length + 1][];
+        all[0] = this.name.getBytes(StandardCharsets.US_ASCII);
+        System.arraycopy(arguments, 0, all, 1, arguments.length);
+        this.binaryFrame = new EncodedCommand(all);
         this.decoder = decoder;
     }
 
@@ -44,19 +50,11 @@ final class TypedCommand<T> {
         return arguments.clone();
     }
 
-    byte[][] binaryArguments() {
-        if (binaryArguments == null) {
+    EncodedCommand binaryFrame() {
+        if (binaryFrame == null) {
             throw new IllegalStateException("Text command requires a text executor");
         }
-        return copy(binaryArguments);
-    }
-
-    private static byte[][] copy(byte[][] values) {
-        byte[][] result = new byte[values.length][];
-        for (int index = 0; index < values.length; index++) {
-            result[index] = values[index].clone();
-        }
-        return result;
+        return binaryFrame;
     }
 
     CommandDecoder<T> decoder() {

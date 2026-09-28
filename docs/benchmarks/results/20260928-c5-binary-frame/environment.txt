@@ -1,0 +1,11 @@
+Mon Sep 28 09:46:15 UTC 2026
+Darwin sus-mac.local 24.4.0 Darwin Kernel Version 24.4.0: Fri Apr 11 18:28:23 PDT 2025; root:xnu-11417.101.15~117/RELEASE_X86_64 x86_64
+java version "21.0.7" 2025-04-15 LTS
+Java(TM) SE Runtime Environment (build 21.0.7+8-LTS-245)
+Java HotSpot(TM) 64-Bit Server VM (build 21.0.7+8-LTS-245, mixed mode, sharing)
+benchmark_host_logical_cpus=8
+benchmark_host_load_1m=34.34
+benchmark_host_load_per_cpu=4.293
+benchmark_host_max_load_per_cpu=1.50
+Host load is too high for a comparable formal network benchmark.
+Wait for load/per-CPU <= 1.50, or use a smoke run.

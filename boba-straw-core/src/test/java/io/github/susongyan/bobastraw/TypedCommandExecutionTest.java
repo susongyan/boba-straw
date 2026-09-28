@@ -1,6 +1,10 @@
 package io.github.susongyan.bobastraw;
 
 import io.github.susongyan.bobastraw.protocol.RespValue;
+import io.github.susongyan.bobastraw.protocol.RespCodec;
+import io.github.susongyan.bobastraw.internal.EncodedCommand;
+import java.nio.ByteBuffer;
+import java.nio.ReadOnlyBufferException;
 import org.junit.jupiter.api.Test;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
@@ -9,23 +13,40 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static org.junit.jupiter.api.Assertions.*;
 
 class TypedCommandExecutionTest {
+    private static RespValue.Array decode(EncodedCommand command) {
+        ByteBuffer buffer = command.buffer();
+        byte[] bytes = new byte[buffer.remaining()];
+        buffer.get(bytes);
+        RespCodec.Decoder decoder = new RespCodec.Decoder();
+        decoder.feed(bytes, bytes.length);
+        RespValue.Array result = (RespValue.Array) decoder.poll();
+        assertNotNull(result);
+        assertNull(decoder.poll());
+        return result;
+    }
+
     @Test
     void binaryInvocationOwnsBothArrayLevelsAndRejectsWrongExecutor() {
         byte[][] arguments = {new byte[] {(byte) 0xff, 0}, new byte[0]};
         TypedCommand<byte[]> command = TypedCommand.binary("set", CommandDecoders.BYTES, arguments);
         arguments[0][0] = 1;
         arguments[1] = new byte[] {2};
-        byte[][] exposed = command.binaryArguments();
-        exposed[0][1] = 3;
-        exposed[1] = new byte[] {4};
+        ByteBuffer exposed = command.binaryFrame().buffer();
+        assertTrue(exposed.isReadOnly());
+        assertThrows(ReadOnlyBufferException.class, () -> exposed.put(0, (byte) 3));
+        assertThrows(ReadOnlyBufferException.class, exposed::array);
+        exposed.position(exposed.limit());
+        assertEquals(0, command.binaryFrame().buffer().position());
+        RespValue.Array encoded = decode(command.binaryFrame());
         assertEquals("SET", command.name());
-        assertArrayEquals(new byte[] {(byte) 0xff, 0}, command.binaryArguments()[0]);
-        assertArrayEquals(new byte[0], command.binaryArguments()[1]);
+        assertEquals("SET", encoded.values.get(0).asString());
+        assertArrayEquals(new byte[] {(byte) 0xff, 0}, CommandDecoders.BYTES.apply(encoded.values.get(1)));
+        assertArrayEquals(new byte[0], CommandDecoders.BYTES.apply(encoded.values.get(2)));
         CommandExecutor text = (name, args) -> {
             fail("Binary command must not reach a text executor");
             return null;
         };
-        BinaryCommandExecutor binary = (name, args) -> {
+        BinaryCommandExecutor binary = frame -> {
             fail("Text command must not reach a binary executor");
             return null;
         };
@@ -46,10 +67,11 @@ class TypedCommandExecutionTest {
     void binaryFacadePreservesBytesCancellationAndFailureWithoutReplay() throws Exception {
         AtomicInteger submissions = new AtomicInteger();
         CompletableFuture<RespValue> source = new CompletableFuture<RespValue>();
-        BobaStrawBinaryCommands commands = BobaStrawBinaryCommands.withExecutor((name, args) -> {
+        BobaStrawBinaryCommands commands = BobaStrawBinaryCommands.withExecutor(frame -> {
             submissions.incrementAndGet();
-            assertArrayEquals(new byte[] {'G', 'E', 'T'}, name);
-            assertArrayEquals(new byte[] {(byte) 0xff, 0}, args[0]);
+            RespValue.Array encoded = decode(frame);
+            assertEquals("GET", encoded.values.get(0).asString());
+            assertArrayEquals(new byte[] {(byte) 0xff, 0}, CommandDecoders.BYTES.apply(encoded.values.get(1)));
             return source;
         });
         assertTrue(commands.get(new byte[] {(byte) 0xff, 0}).toCompletableFuture().cancel(false));
@@ -58,7 +80,7 @@ class TypedCommandExecutionTest {
 
         CompletableFuture<RespValue> failed = new CompletableFuture<RespValue>();
         RuntimeException failure = new IllegalStateException("possibly executed");
-        BobaStrawBinaryCommands failing = BobaStrawBinaryCommands.withExecutor((name, args) -> {
+        BobaStrawBinaryCommands failing = BobaStrawBinaryCommands.withExecutor(frame -> {
             submissions.incrementAndGet();
             return failed;
         });
@@ -72,7 +94,7 @@ class TypedCommandExecutionTest {
     @Test
     void binaryValidationPrecedesSubmissionAndMalformedReplyFailsMapping() {
         AtomicInteger submissions = new AtomicInteger();
-        BobaStrawBinaryCommands commands = BobaStrawBinaryCommands.withExecutor((name, args) -> {
+        BobaStrawBinaryCommands commands = BobaStrawBinaryCommands.withExecutor(frame -> {
             submissions.incrementAndGet();
             return CompletableFuture.completedFuture(new RespValue.SimpleString("not-a-number"));
         });

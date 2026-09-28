@@ -1,0 +1,240 @@
+# JMH version: 1.37
+# VM version: JDK 21.0.7, Java HotSpot(TM) 64-Bit Server VM, 21.0.7+8-LTS-245
+# VM invoker: /Library/Java/JavaVirtualMachines/jdk-21.jdk/Contents/Home/bin/java
+# VM options: -Xms1g -Xmx1g
+# Blackhole mode: compiler (auto-detected, use -Djmh.blackhole.autoDetect=false to disable)
+# Warmup: 3 iterations, 1 s each
+# Measurement: 5 iterations, 1 s each
+# Timeout: 10 min per iteration
+# Threads: 1 thread, will synchronize iterations
+# Benchmark mode: Throughput, ops/time
+# Benchmark: io.github.susongyan.bobastraw.benchmarks.RedisBinaryLargeValueBenchmark.set
+# Parameters: (endpoint = redis://127.0.0.1:17379, protocol = AUTO, valueBytes = 1024)
+
+# Run progress: 0.00% complete, ETA 00:00:24
+# Fork: 1 of 1
+# Warmup Iteration   1: 174.007 ops/s
+# Warmup Iteration   2: 157.776 ops/s
+# Warmup Iteration   3: 199.254 ops/s
+Iteration   1: 175.169 ops/s
+                 gc.alloc.rate:      0.941 MB/sec
+                 gc.alloc.rate.norm: 5633.000 B/op
+                 gc.count:           ≈ 0 counts
+
+Iteration   2: 187.473 ops/s
+                 gc.alloc.rate:      1.005 MB/sec
+                 gc.alloc.rate.norm: 5626.484 B/op
+                 gc.count:           ≈ 0 counts
+
+Iteration   3: 211.361 ops/s
+                 gc.alloc.rate:      1.133 MB/sec
+                 gc.alloc.rate.norm: 5624.340 B/op
+                 gc.count:           ≈ 0 counts
+
+Iteration   4: 237.238 ops/s
+                 gc.alloc.rate:      1.220 MB/sec
+                 gc.alloc.rate.norm: 5391.832 B/op
+                 gc.count:           ≈ 0 counts
+
+Iteration   5: 221.570 ops/s
+                 gc.alloc.rate:      1.070 MB/sec
+                 gc.alloc.rate.norm: 5109.910 B/op
+                 gc.count:           ≈ 0 counts
+
+
+
+Result "io.github.susongyan.bobastraw.benchmarks.RedisBinaryLargeValueBenchmark.set":
+  206.562 ±(99.9%) 97.018 ops/s [Average]
+  (min, avg, max) = (175.169, 206.562, 237.238), stdev = 25.195
+  CI (99.9%): [109.544, 303.580] (assumes normal distribution)
+
+Secondary result "io.github.susongyan.bobastraw.benchmarks.RedisBinaryLargeValueBenchmark.set:gc.alloc.rate":
+  1.074 ±(99.9%) 0.418 MB/sec [Average]
+  (min, avg, max) = (0.941, 1.074, 1.220), stdev = 0.109
+  CI (99.9%): [0.655, 1.492] (assumes normal distribution)
+
+Secondary result "io.github.susongyan.bobastraw.benchmarks.RedisBinaryLargeValueBenchmark.set:gc.alloc.rate.norm":
+  5477.113 ±(99.9%) 883.131 B/op [Average]
+  (min, avg, max) = (5109.910, 5477.113, 5633.000), stdev = 229.346
+  CI (99.9%): [4593.982, 6360.245] (assumes normal distribution)
+
+Secondary result "io.github.susongyan.bobastraw.benchmarks.RedisBinaryLargeValueBenchmark.set:gc.count":
+  ≈ 0 counts
+
+
+# JMH version: 1.37
+# VM version: JDK 21.0.7, Java HotSpot(TM) 64-Bit Server VM, 21.0.7+8-LTS-245
+# VM invoker: /Library/Java/JavaVirtualMachines/jdk-21.jdk/Contents/Home/bin/java
+# VM options: -Xms1g -Xmx1g
+# Blackhole mode: compiler (auto-detected, use -Djmh.blackhole.autoDetect=false to disable)
+# Warmup: 3 iterations, 1 s each
+# Measurement: 5 iterations, 1 s each
+# Timeout: 10 min per iteration
+# Threads: 1 thread, will synchronize iterations
+# Benchmark mode: Throughput, ops/time
+# Benchmark: io.github.susongyan.bobastraw.benchmarks.RedisBinaryLargeValueBenchmark.set
+# Parameters: (endpoint = redis://127.0.0.1:17379, protocol = AUTO, valueBytes = 65536)
+
+# Run progress: 33.33% complete, ETA 00:00:18
+# Fork: 1 of 1
+# Warmup Iteration   1: 135.834 ops/s
+# Warmup Iteration   2: 184.691 ops/s
+# Warmup Iteration   3: 134.827 ops/s
+Iteration   1: 147.362 ops/s
+                 gc.alloc.rate:      28.018 MB/sec
+                 gc.alloc.rate.norm: 199429.784 B/op
+                 gc.count:           1.000 counts
+                 gc.time:            3.000 ms
+
+Iteration   2: 154.089 ops/s
+                 gc.alloc.rate:      29.292 MB/sec
+                 gc.alloc.rate.norm: 199420.903 B/op
+                 gc.count:           ≈ 0 counts
+
+Iteration   3: 158.482 ops/s
+                 gc.alloc.rate:      30.131 MB/sec
+                 gc.alloc.rate.norm: 199420.176 B/op
+                 gc.count:           ≈ 0 counts
+
+Iteration   4: 137.139 ops/s
+                 gc.alloc.rate:      26.026 MB/sec
+                 gc.alloc.rate.norm: 199171.884 B/op
+                 gc.count:           ≈ 0 counts
+
+Iteration   5: 135.634 ops/s
+                 gc.alloc.rate:      25.529 MB/sec
+                 gc.alloc.rate.norm: 199074.353 B/op
+                 gc.count:           ≈ 0 counts
+
+
+
+Result "io.github.susongyan.bobastraw.benchmarks.RedisBinaryLargeValueBenchmark.set":
+  146.541 ±(99.9%) 38.870 ops/s [Average]
+  (min, avg, max) = (135.634, 146.541, 158.482), stdev = 10.094
+  CI (99.9%): [107.671, 185.412] (assumes normal distribution)
+
+Secondary result "io.github.susongyan.bobastraw.benchmarks.RedisBinaryLargeValueBenchmark.set:gc.alloc.rate":
+  27.799 ±(99.9%) 7.704 MB/sec [Average]
+  (min, avg, max) = (25.529, 27.799, 30.131), stdev = 2.001
+  CI (99.9%): [20.095, 35.504] (assumes normal distribution)
+
+Secondary result "io.github.susongyan.bobastraw.benchmarks.RedisBinaryLargeValueBenchmark.set:gc.alloc.rate.norm":
+  199303.420 ±(99.9%) 647.709 B/op [Average]
+  (min, avg, max) = (199074.353, 199303.420, 199429.784), stdev = 168.208
+  CI (99.9%): [198655.711, 199951.129] (assumes normal distribution)
+
+Secondary result "io.github.susongyan.bobastraw.benchmarks.RedisBinaryLargeValueBenchmark.set:gc.count":
+  1.000 ±(99.9%) 0.001 counts [Sum]
+  (min, avg, max) = (≈ 0, 0.200, 1.000), stdev = 0.447
+  CI (99.9%): [1.000, 1.000] (assumes normal distribution)
+
+Secondary result "io.github.susongyan.bobastraw.benchmarks.RedisBinaryLargeValueBenchmark.set:gc.time":
+  3.000 ±(99.9%) 0.001 ms [Sum]
+  (min, avg, max) = (≈ 0, 0.600, 3.000), stdev = 1.342
+  CI (99.9%): [3.000, 3.000] (assumes normal distribution)
+
+
+# JMH version: 1.37
+# VM version: JDK 21.0.7, Java HotSpot(TM) 64-Bit Server VM, 21.0.7+8-LTS-245
+# VM invoker: /Library/Java/JavaVirtualMachines/jdk-21.jdk/Contents/Home/bin/java
+# VM options: -Xms1g -Xmx1g
+# Blackhole mode: compiler (auto-detected, use -Djmh.blackhole.autoDetect=false to disable)
+# Warmup: 3 iterations, 1 s each
+# Measurement: 5 iterations, 1 s each
+# Timeout: 10 min per iteration
+# Threads: 1 thread, will synchronize iterations
+# Benchmark mode: Throughput, ops/time
+# Benchmark: io.github.susongyan.bobastraw.benchmarks.RedisBinaryLargeValueBenchmark.set
+# Parameters: (endpoint = redis://127.0.0.1:17379, protocol = AUTO, valueBytes = 1048576)
+
+# Run progress: 66.67% complete, ETA 00:00:09
+# Fork: 1 of 1
+# Warmup Iteration   1: 30.640 ops/s
+# Warmup Iteration   2: 28.683 ops/s
+# Warmup Iteration   3: 29.971 ops/s
+Iteration   1: 38.022 ops/s
+                 gc.alloc.rate:      114.239 MB/sec
+                 gc.alloc.rate.norm: 3152175.795 B/op
+                 gc.count:           ≈ 0 counts
+
+Iteration   2: 29.431 ops/s
+                 gc.alloc.rate:      88.442 MB/sec
+                 gc.alloc.rate.norm: 3152217.867 B/op
+                 gc.count:           1.000 counts
+                 gc.time:            15.000 ms
+
+Iteration   3: 32.402 ops/s
+                 gc.alloc.rate:      97.371 MB/sec
+                 gc.alloc.rate.norm: 3152199.273 B/op
+                 gc.count:           ≈ 0 counts
+
+Iteration   4: 41.021 ops/s
+                 gc.alloc.rate:      123.271 MB/sec
+                 gc.alloc.rate.norm: 3152149.333 B/op
+                 gc.count:           1.000 counts
+                 gc.time:            6.000 ms
+
+Iteration   5: 29.637 ops/s
+                 gc.alloc.rate:      87.534 MB/sec
+                 gc.alloc.rate.norm: 3152845.600 B/op
+                 gc.count:           ≈ 0 counts
+
+
+
+Result "io.github.susongyan.bobastraw.benchmarks.RedisBinaryLargeValueBenchmark.set":
+  34.103 ±(99.9%) 19.999 ops/s [Average]
+  (min, avg, max) = (29.431, 34.103, 41.021), stdev = 5.194
+  CI (99.9%): [14.104, 54.101] (assumes normal distribution)
+
+Secondary result "io.github.susongyan.bobastraw.benchmarks.RedisBinaryLargeValueBenchmark.set:gc.alloc.rate":
+  102.172 ±(99.9%) 61.388 MB/sec [Average]
+  (min, avg, max) = (87.534, 102.172, 123.271), stdev = 15.942
+  CI (99.9%): [40.784, 163.559] (assumes normal distribution)
+
+Secondary result "io.github.susongyan.bobastraw.benchmarks.RedisBinaryLargeValueBenchmark.set:gc.alloc.rate.norm":
+  3152317.574 ±(99.9%) 1140.913 B/op [Average]
+  (min, avg, max) = (3152149.333, 3152317.574, 3152845.600), stdev = 296.291
+  CI (99.9%): [3151176.661, 3153458.486] (assumes normal distribution)
+
+Secondary result "io.github.susongyan.bobastraw.benchmarks.RedisBinaryLargeValueBenchmark.set:gc.count":
+  2.000 ±(99.9%) 0.001 counts [Sum]
+  (min, avg, max) = (≈ 0, 0.400, 1.000), stdev = 0.548
+  CI (99.9%): [2.000, 2.000] (assumes normal distribution)
+
+Secondary result "io.github.susongyan.bobastraw.benchmarks.RedisBinaryLargeValueBenchmark.set:gc.time":
+  21.000 ±(99.9%) 0.001 ms [Sum]
+  (min, avg, max) = (≈ 0, 4.200, 15.000), stdev = 6.573
+  CI (99.9%): [21.000, 21.000] (assumes normal distribution)
+
+
+# Run complete. Total time: 00:00:28
+
+REMEMBER: The numbers below are just data. To gain reusable insights, you need to follow up on
+why the numbers are the way they are. Use profilers (see -prof, -lprof), design factorial
+experiments, perform baseline and negative tests that provide experimental control, make sure
+the benchmarking environment is safe on JVM/OS/HW level, ask for reviews from the domain experts.
+Do not assume the numbers tell you what you want them to tell.
+
+NOTE: Current JVM experimentally supports Compiler Blackholes, and they are in use. Please exercise
+extra caution when trusting the results, look into the generated code to check the benchmark still
+works, and factor in a small probability of new VM bugs. Additionally, while comparisons between
+different JVMs are already problematic, the performance difference caused by different Blackhole
+modes can be very significant. Please make sure you use the consistent Blackhole mode for comparisons.
+
+Benchmark                                                           (endpoint)  (protocol)  (valueBytes)   Mode  Cnt        Score      Error   Units
+RedisBinaryLargeValueBenchmark.set                     redis://127.0.0.1:17379        AUTO          1024  thrpt    5      206.562 ±   97.018   ops/s
+RedisBinaryLargeValueBenchmark.set:gc.alloc.rate       redis://127.0.0.1:17379        AUTO          1024  thrpt    5        1.074 ±    0.418  MB/sec
+RedisBinaryLargeValueBenchmark.set:gc.alloc.rate.norm  redis://127.0.0.1:17379        AUTO          1024  thrpt    5     5477.113 ±  883.131    B/op
+RedisBinaryLargeValueBenchmark.set:gc.count            redis://127.0.0.1:17379        AUTO          1024  thrpt    5          ≈ 0             counts
+RedisBinaryLargeValueBenchmark.set                     redis://127.0.0.1:17379        AUTO         65536  thrpt    5      146.541 ±   38.870   ops/s
+RedisBinaryLargeValueBenchmark.set:gc.alloc.rate       redis://127.0.0.1:17379        AUTO         65536  thrpt    5       27.799 ±    7.704  MB/sec
+RedisBinaryLargeValueBenchmark.set:gc.alloc.rate.norm  redis://127.0.0.1:17379        AUTO         65536  thrpt    5   199303.420 ±  647.709    B/op
+RedisBinaryLargeValueBenchmark.set:gc.count            redis://127.0.0.1:17379        AUTO         65536  thrpt    5        1.000             counts
+RedisBinaryLargeValueBenchmark.set:gc.time             redis://127.0.0.1:17379        AUTO         65536  thrpt    5        3.000                 ms
+RedisBinaryLargeValueBenchmark.set                     redis://127.0.0.1:17379        AUTO       1048576  thrpt    5       34.103 ±   19.999   ops/s
+RedisBinaryLargeValueBenchmark.set:gc.alloc.rate       redis://127.0.0.1:17379        AUTO       1048576  thrpt    5      102.172 ±   61.388  MB/sec
+RedisBinaryLargeValueBenchmark.set:gc.alloc.rate.norm  redis://127.0.0.1:17379        AUTO       1048576  thrpt    5  3152317.574 ± 1140.913    B/op
+RedisBinaryLargeValueBenchmark.set:gc.count            redis://127.0.0.1:17379        AUTO       1048576  thrpt    5        2.000             counts
+RedisBinaryLargeValueBenchmark.set:gc.time             redis://127.0.0.1:17379        AUTO       1048576  thrpt    5       21.000                 ms
+
+Benchmark result is saved to docs/benchmarks/results/20260928-c5-binary-frame-diagnostic/01-A.json

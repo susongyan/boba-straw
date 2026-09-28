@@ -9,7 +9,7 @@ public final class BobaStrawBinaryCommands {
     private final BinaryCommandExecutor executor;
 
     BobaStrawBinaryCommands(BobaStrawClient client) {
-        this((name, arguments) -> client.executeBinaryAsync(name, arguments));
+        this(command -> client.executeEncodedCommand(command));
     }
 
     private BobaStrawBinaryCommands(BinaryCommandExecutor executor) {
