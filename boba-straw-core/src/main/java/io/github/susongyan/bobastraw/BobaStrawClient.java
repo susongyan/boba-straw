@@ -227,6 +227,10 @@ public final class BobaStrawClient implements AutoCloseable {
     }
 
     CompletionStage<List<RespValue>> executeBatch(List<String[]> commands) {
+        return executeBatch(commands, false);
+    }
+
+    CompletionStage<List<RespValue>> executeBatch(List<String[]> commands, boolean retainServerErrors) {
         for (String[] command : commands) {
             if (command == null || command.length == 0) {
                 throw new IllegalArgumentException("Pipeline command is required");
@@ -234,7 +238,7 @@ public final class BobaStrawClient implements AutoCloseable {
             CommandRegistry.requireOrdinary(command[0], CommandArgs.text(
                 java.util.Arrays.copyOfRange(command, 1, command.length)));
         }
-        return sharedConnection().executeBatch(commands);
+        return sharedConnection().executeBatch(commands, retainServerErrors);
     }
 
     CompletionStage<RespValue> executeBlocking(String[] command, boolean transportCompletion) {

@@ -150,10 +150,20 @@ class DedicatedConnectionLifecycleTest {
 
     @Test
     void cancellingExecDestroysLeaseAndCannotReturnItTwice() throws Exception {
+        cancellingExec(false);
+    }
+
+    @Test
+    void cancellingTypedExecDestroysLeaseAndCannotReturnItTwice() throws Exception {
+        cancellingExec(true);
+    }
+
+    private void cancellingExec(boolean typed) throws Exception {
         try (Peer peer = new Peer(); BobaStrawClient client = client(peer, 2000)) {
             peer.hold = "EXEC";
             BobaStrawTransaction transaction = client.transaction().command("GET", "key");
-            CompletableFuture<List<RespValue>> result = transaction.exec().toCompletableFuture();
+            CompletableFuture<?> result = typed ? transaction.execTyped().toCompletableFuture()
+                : transaction.exec().toCompletableFuture();
             Session held = peer.awaitHeld();
             assertTrue(result.cancel(false));
             assertTrue(held.closed.await(1, TimeUnit.SECONDS));
@@ -209,15 +219,41 @@ class DedicatedConnectionLifecycleTest {
 
     @Test
     void execTimeoutIsAmbiguousAndClosesDedicatedSocket() throws Exception {
+        execTimeout(false);
+    }
+
+    @Test
+    void typedExecTimeoutIsAmbiguousAndClosesDedicatedSocket() throws Exception {
+        execTimeout(true);
+    }
+
+    private void execTimeout(boolean typed) throws Exception {
         try (Peer peer = new Peer(); BobaStrawClient client = client(peer, 250)) {
             peer.hold = "EXEC";
-            CompletableFuture<List<RespValue>> result = client.transaction().exec().toCompletableFuture();
+            BobaStrawTransaction transaction = client.transaction();
+            CompletableFuture<?> result = typed ? transaction.execTyped().toCompletableFuture()
+                : transaction.exec().toCompletableFuture();
             Session held = peer.awaitHeld();
             Throwable failure = failure(result);
             assertTrue(failure instanceof BobaStrawCommandTimeoutException);
             assertTrue(((BobaStrawCommandTimeoutException) failure).mayHaveExecuted());
             assertTrue(held.closed.await(1, TimeUnit.SECONDS));
             assertEquals(1, peer.count("EXEC"));
+        }
+    }
+
+    @Test
+    void typedPipelineTimeoutIsNotConvertedToAnIndividualServerError() throws Exception {
+        try (Peer peer = new Peer(); BobaStrawClient client = client(peer, 250)) {
+            peer.hold = "GET";
+            BobaStrawPipeline pipeline = client.pipeline();
+            pipeline.typed().get("key");
+            CompletableFuture<BobaStrawBatchResult> result = pipeline.executeTyped().toCompletableFuture();
+            peer.awaitHeld();
+            Throwable error = failure(result);
+            assertTrue(error instanceof BobaStrawCommandTimeoutException);
+            assertTrue(((BobaStrawCommandTimeoutException) error).mayHaveExecuted());
+            assertEquals(1, peer.count("GET"));
         }
     }
 

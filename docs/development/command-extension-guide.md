@@ -90,6 +90,15 @@ CommandModelTest 自动遍历注册表检查查找、Key 元数据和连接模�
 尚无 `docs/commands/coverage.yaml`，现阶段在任务报告或相关功能文档记录命令/选项级状态；
 实现和验证分开，未运行与不适用分开。Skill 不替代 CI 或人工批准。
 
+### 批量 typed 扩展
+
+Pipeline/事务的 BobaStrawBatchCommands 返回 BobaStrawCommandHandle<T>，不返回 CompletionStage<T>。
+普通方法复用 TypedCommand/decoder，由所属批次本地入队；不能调用普通 executor 绕过批量提交或事务租约。
+result.get(handle) 在调用线程映射，参数及结果类型需与普通 facade 一致。
+新方法应进入 TypedBatchCompatibilityTest，覆盖 Raw/typed 混排、位置、错误与 RESP2/AUTO。
+不得将网络错误转成单条 RESP Error，也不得把 WATCH abort 当作合法空值。
+批量取消由 executeTyped/execTyped 的 Stage 控制；不要添加绕过已有 FIFO/租约销毁语义的单条取消。
+
 ## 换模型、恢复任务与排障
 
 | 情况 | 处理 |

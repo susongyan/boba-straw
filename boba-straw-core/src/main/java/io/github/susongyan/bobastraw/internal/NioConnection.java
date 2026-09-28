@@ -467,6 +467,11 @@ public final class NioConnection implements AutoCloseable {
     }
 
     public CompletionStage<List<RespValue>> executeBatch(List<String[]> commands) {
+        return executeBatch(commands, false);
+    }
+
+    /** Retain only explicit server errors; transport, timeout and delivery failures remain exceptional. */
+    public CompletionStage<List<RespValue>> executeBatch(List<String[]> commands, boolean retainServerErrors) {
         List<byte[]> frames = new ArrayList<byte[]>(commands.size());
         for (String[] command : commands) {
             frames.add(RespCodec.encodeCommand(command));
@@ -499,7 +504,19 @@ public final class NioConnection implements AutoCloseable {
         for (int index = 0; index < frames.size(); index++) {
             Request request = newRequest(frames.get(index), capacityReservations.get(index));
             requests.add(request);
-            futures.add(exposeToCaller(request, reservations.get(index)));
+            CompletableFuture<RespValue> reply = exposeToCaller(request, reservations.get(index));
+            if (retainServerErrors) {
+                reply = reply.handle((value, error) -> {
+                    if (error instanceof BobaStrawServerException) {
+                        return new RespValue.Error(error.getMessage());
+                    }
+                    if (error != null) {
+                        throw new java.util.concurrent.CompletionException(error);
+                    }
+                    return value;
+                });
+            }
+            futures.add(reply);
         }
         enqueueExternal(requests);
         CompletableFuture<?>[] all = futures.toArray(new CompletableFuture<?>[futures.size()]);

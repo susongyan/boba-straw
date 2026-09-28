@@ -14,12 +14,13 @@ public final class BobaStrawPipeline {
     private final BobaStrawClient client;
     private final List<String[]> commands = new ArrayList<String[]>();
     private final AtomicBoolean executed = new AtomicBoolean();
+    private final Object resultOwner = new Object();
 
     BobaStrawPipeline(BobaStrawClient client) {
         this.client = client;
     }
 
-    public BobaStrawPipeline command(String name, String... arguments) {
+    public synchronized BobaStrawPipeline command(String name, String... arguments) {
         if (executed.get()) {
             throw new IllegalStateException("Pipeline has already been executed");
         }
@@ -31,11 +32,32 @@ public final class BobaStrawPipeline {
         return this;
     }
 
-    public CompletionStage<List<RespValue>> execute() {
+    public BobaStrawBatchCommands typed() {
+        return new BobaStrawBatchCommands(this::enqueue);
+    }
+
+    private synchronized <T> BobaStrawCommandHandle<T> enqueue(TypedCommand<T> command) {
+        int index = commands.size();
+        command(command.name(), command.arguments());
+        return new BobaStrawCommandHandle<T>(resultOwner, index, command.decoder());
+    }
+
+    /** Runs once, retaining individual server errors for result.get(handle). */
+    public CompletionStage<BobaStrawBatchResult> executeTyped() {
+        List<String[]> snapshot = takeCommands();
+        return BobaStrawStages.map(client.executeBatch(snapshot, true),
+            values -> new BobaStrawBatchResult(resultOwner, values, snapshot.size(), false));
+    }
+
+    private synchronized List<String[]> takeCommands() {
         if (!executed.compareAndSet(false, true)) {
             throw new IllegalStateException("Pipeline has already been executed");
         }
-        CompletionStage<List<RespValue>> operation = client.executeBatch(commands);
+        return new ArrayList<String[]>(commands);
+    }
+
+    public CompletionStage<List<RespValue>> execute() {
+        CompletionStage<List<RespValue>> operation = client.executeBatch(takeCommands());
         CompletableFuture<List<RespValue>> result = new CompletableFuture<List<RespValue>>();
         operation.whenComplete((values, error) -> {
             if (error != null) {

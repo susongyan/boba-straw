@@ -22,6 +22,7 @@ public final class BobaStrawTransaction implements AutoCloseable {
     private boolean finished;
     private Operation<?> operation;
     private CompletableFuture<?> source;
+    private final Object resultOwner = new Object();
 
     BobaStrawTransaction(BobaStrawClient client, NioConnection connection) {
         this.client = client;
@@ -73,6 +74,26 @@ public final class BobaStrawTransaction implements AutoCloseable {
      * Errors inside the EXEC array remain individual RESP error values, not a rollback.
      */
     public CompletionStage<List<RespValue>> exec() {
+        return exec(BobaStrawTransaction::arrayResult);
+    }
+
+    public BobaStrawBatchCommands typed() {
+        return new BobaStrawBatchCommands(this::enqueue);
+    }
+
+    private synchronized <T> BobaStrawCommandHandle<T> enqueue(TypedCommand<T> command) {
+        int index = commands.size();
+        command(command.name(), command.arguments());
+        return new BobaStrawCommandHandle<T>(resultOwner, index, command.decoder());
+    }
+
+    /** Preserves WATCH abort separately from a successful empty EXEC array. */
+    public CompletionStage<BobaStrawBatchResult> execTyped() {
+        return exec(value -> new BobaStrawBatchResult(resultOwner, arrayResult(value), commands.size(),
+            value instanceof RespValue.Null));
+    }
+
+    private <T> CompletionStage<T> exec(Function<RespValue, T> mapper) {
         return start(() -> {
             CompletionStage<RespValue> chain = executeStep(new String[] {"MULTI"})
                 .thenApply(BobaStrawTransaction::ok);
@@ -85,7 +106,7 @@ public final class BobaStrawTransaction implements AutoCloseable {
                 });
             }
             return chain.thenCompose(ignored -> executeStep(new String[] {"EXEC"}));
-        }, true, BobaStrawTransaction::arrayResult);
+        }, true, mapper);
     }
 
     private synchronized CompletionStage<RespValue> executeStep(String[] command) {

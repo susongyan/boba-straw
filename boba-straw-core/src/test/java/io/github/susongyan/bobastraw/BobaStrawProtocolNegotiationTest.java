@@ -140,6 +140,16 @@ class BobaStrawProtocolNegotiationTest {
     @Test
     @Tag("fault-injection")
     void pipelineCancellationPropagatesToConnectionResponseDraining() throws Exception {
+        pipelineCancellation(false);
+    }
+
+    @Test
+    @Tag("fault-injection")
+    void typedPipelineCancellationPropagatesToConnectionResponseDraining() throws Exception {
+        pipelineCancellation(true);
+    }
+
+    private void pipelineCancellation(boolean typed) throws Exception {
         CountDownLatch commandsReceived = new CountDownLatch(1);
         CountDownLatch repliesAllowed = new CountDownLatch(1);
         FakeRedisServer server = new FakeRedisServer(new SessionHandler() {
@@ -162,9 +172,11 @@ class BobaStrawProtocolNegotiationTest {
             .protocol(ProtocolVersion.RESP2)
             .commandTimeout(Duration.ofSeconds(2))
             .build()) {
-            java.util.concurrent.CompletableFuture<List<io.github.susongyan.bobastraw.protocol.RespValue>> pipeline =
-                client.pipeline().command("GET", "first").command("GET", "second")
-                    .execute().toCompletableFuture();
+            BobaStrawPipeline batch = client.pipeline();
+            batch.typed().get("first");
+            batch.typed().get("second");
+            java.util.concurrent.CompletableFuture<?> pipeline = typed
+                ? batch.executeTyped().toCompletableFuture() : batch.execute().toCompletableFuture();
 
             assertTrue(commandsReceived.await(2, TimeUnit.SECONDS));
             assertTrue(pipeline.cancel(false));

@@ -218,3 +218,43 @@ CMD-03/05/07/08/09/11/12 按本批范围核对；RESP wire decoder 未改，既�
 兼容性为源码签名复核与 Java 8 编译验证，未执行 japicmp 制品比较、独立 Agent 审查或跨模型验证。
 JDK 11/17/25、其他 OS、长稳及本批性能基线未运行；参数快照增加数组复制，不能宣称零分配/零开销。
 按命令开发 Skill 保留专用入口和明确的未完成清单，C5 整体仍在进行中。
+
+## C5 typed 批量结果第二批（2026-09-28）
+
+基线 `d74d59c` 加本批工作树。Standalone Pipeline/事务新增 typed()，返回共享的
+BobaStrawBatchCommands。初始 16 个 String 方法：GET、SET、DEL、EXISTS、INCR、TTL、MGET、
+HGET、HSET、HGETALL、LPUSH、LRANGE、SADD、SMEMBERS、ZADD、ZSCORE。
+返回 BobaStrawCommandHandle<T>，执行 executeTyped()/execTyped() 后用 BobaStrawBatchResult.get
+取值。句柄绑定批次，复用 TypedCommand/decoder；不是 Future，不支持单条取消。
+
+Raw/typed 可以混排，原 execute()/exec() 方法签名及行为保留。新 Pipeline 模式保留单条
+服务端错误，读取对应句柄抛 BobaStrawServerException；网络/超时/容量失败仍整批异常。
+事务结果区分 WATCH abort 与成功的空 EXEC；执行期单条错误不会伪装成回滚。
+Pipeline 入队/执行快照现在在短同步区内协调，网络提交与结果交付不持该锁。
+事务使用原专用池租约及 start/abort 路径，不经普通共享 executor，不创建额外线程。
+
+语义来源（2026-09-28）：[Redis transactions](https://redis.io/docs/latest/develop/using-commands/transactions/)、
+[Redis pipelining](https://redis.io/docs/latest/develop/using-commands/pipelining/)；命令参数形式未增加新版选项。
+示例与详细错误语义见 [命令模型](../architecture/command-model.md)。
+
+验证：
+
+- TypedBatchResultTest：批次身份、空值、Simple/Blob Error、只读列表、WATCH abort 与回复数量校验。
+- TypedBatchCompatibilityTest：16 方法、Raw/typed 混排、错误位置与后续成功结果、重复执行拒绝、
+  空批次、WATCH 冲突、排队错误不发送 EXEC、原 Raw Pipeline 错误行为及下一事务租约可用。
+- DedicatedConnectionLifecycleTest：增加 typed EXEC 取消/超时关闭专用 socket、下一租约重建，
+  typed Pipeline 超时仍保留可能已执行异常而非转成服务端错误。
+- BobaStrawProtocolNegotiationTest：增加 typed Pipeline 已发送取消、响应排空与后续命令匹配。
+
+针对性测试先在 `/private/tmp/boba-straw-typed-batch-KuC7qo` 通过 37 项；随后补充两项 typed
+超时测试，最终运行根目录全模块 `mvn clean test`，经 run-compatibility-matrix.sh full 隔离副本执行：
+Oracle JDK 8u202 与 21.0.7 **各 134 tests、0 failures/errors/skipped**。
+真实兼容包括 Redis 5.0.14/6.2.14/7.4.2、Valkey 8.1.3 的 RESP2/AUTO，以及原 Cluster/Sentinel 回归。
+批量新 API 的真实用例只针对 Standalone，不表示支持拓扑批量组合。
+最终 core/src 与验证快照一致，日志/报告保存在 `$TMPDIR/boba-straw-compatibility-fqIAzF/run-1`、`run-2`。
+
+CMD-03/05/08/09/10/11/12 按本批边界核对；协议解码与 FIFO 未改，既有分片回归继续通过。
+公开兼容复核为增量类型/方法与 Java 8 全量编译测试，未执行 japicmp、独立 Agent 或跨模型审查。
+JDK 11/17/25、其他 OS、长稳及本批性能压测未运行，临时报告不是永久发布归档。
+尚未覆盖：批量 binary、其余普通方法的批量 typed 包装、Cluster/Sentinel 批量专用组合、
+Scan 页结果、binary/sync 执行统一；C5 仍未整体关闭。

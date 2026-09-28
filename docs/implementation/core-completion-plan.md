@@ -281,3 +281,11 @@ AUTO/RESP2 与原有 Cluster/Sentinel 实测。期间修正一处既有公平性
 没有增加自动重试；Standalone 阻塞路径不变，另外两种拓扑的阻塞方法明确本地拒绝。
 本批不包括 binary/sync 执行统一、Pipeline/事务 typed 结果、Scan 页模型，C5 仍在进行中。
 测试结果与证据追加在命令覆盖清单，不将抽象复用标为完整拓扑专用能力完成。
+
+### C5 typed 批量结果第二批
+
+基线 `d74d59c`：Standalone Pipeline/事务增加 typed() 本地入队目录与结果句柄，
+executeTyped()/execTyped() 返回 BobaStrawBatchResult；原 Raw execute()/exec() 保留。
+初始高频 String 方法共 16 个，覆盖主要数据结构，不为批量新建线程或复用普通连接执行事务。
+新结果区分 WATCH abort、空事务、单条服务端错误和整批网络失败；取消仍排空 Pipeline 或销毁事务租约。
+验收与来源见命令覆盖清单。下一步为 Scan 页模型；binary/sync 执行统一、拓扑 binary 与专用组合仍需后续批次。

@@ -104,3 +104,52 @@ Cluster/Sentinel 调用时同步抛 UnsupportedOperationException，发送前拒
 该抽象当前仅面向普通 text 命令，不用它直接执行 MULTI/EXEC 或订阅。
 下一批：设计 Pipeline/事务异构结果句柄（保留原 List<RespValue> API）、独立批量生命周期，
 再补 Scan 页结果；binary/sync 的统一与拓扑 binary 支持需分别验证，不能由本批推断已实现。
+
+### Pipeline / 事务 typed 结果（2026-09-28，第二批）
+
+新增 BobaStrawBatchCommands（本地入队）、BobaStrawCommandHandle<T>（批次身份、位置、decoder）
+和 BobaStrawBatchResult（有序回复、WATCH abort 标记）。Pipeline 与事务共用 typed() 命令目录，
+内部复用 TypedCommand<T> 与既有 decoder，但不经普通 CommandExecutor 逐条发送。
+事务仍控制专用租约上的 MULTI/QUEUED/EXEC；Pipeline 仍使用批量准入和聚合写入。
+
+句柄不是 Future，不支持单条取消；必须执行 executeTyped()/execTyped() 后通过 get(handle) 取值。
+解码发生在 get 的调用线程，不占 EventLoop，也不创建未执行但待完成的 Future。
+不同批次的句柄拒绝读取，Raw 与 typed 命令可以混排，位置以同一队列为准。
+
+| 结果 | 新 typed 批量接口 | 原 Raw 接口 |
+| --- | --- | --- |
+| 全部普通回复 | 按句柄返回各自类型 | List<RespValue> 不变 |
+| 单条服务端错误 | get(对应句柄) 抛 BobaStrawServerException，其他位置可读 | Pipeline execute 整批异常；事务 exec 数组内保留错误 |
+| 网络失败、超时、容量拒绝 | 整批 Stage 异常，不伪装为单条服务端错误 | 保留原行为 |
+| WATCH 冲突 | isAborted 为 true，get 拒绝读取 | exec 仍返回空列表 |
+| 成功的空事务 | isAborted 为 false，回复为空 | exec 返回空列表 |
+
+Pipeline retain-errors 模式只将显式 BobaStrawServerException 转成 RESP Error，保留消息，
+不保留 RESP3 BlobError 的 wire 类型；连接/超时异常不会转为成功。Raw execute 使用旧模式。
+事务 EXEC 数组里的错误保持原 RESP 类型。结果只快照列表结构，replies() 不深复制 RESP payload。
+
+取消 executeTyped 的 Stage 向原批量请求传播，已发送响应仍排空；取消 execTyped 使用原
+Operation.abort 销毁租约。没有自动重试、逐条跳过、失败回滚或隐式跨 Slot 拆分。
+本批只提供 Standalone String 批量目录，暂不提供 binary 或 Cluster/Sentinel 的批量组合。
+初始 16 个高频方法与测试记录见覆盖清单；Scan 页结果和 binary/sync 统一仍待实现。
+
+```java
+BobaStrawPipeline batch = client.pipeline();
+BobaStrawCommandHandle<String> value = batch.typed().get("key");
+BobaStrawCommandHandle<Long> ttl = batch.typed().ttl("key");
+BobaStrawBatchResult result = batch.executeTyped().toCompletableFuture().get();
+String text = result.get(value);
+Long seconds = result.get(ttl);
+
+try (BobaStrawTransaction tx = client.transaction()) {
+    BobaStrawCommandHandle<Long> count = tx.typed().incr("counter");
+    BobaStrawBatchResult committed = tx.execTyped().toCompletableFuture().get();
+    if (!committed.isAborted()) {
+        Long current = committed.get(count);
+    }
+}
+```
+
+语义核实：[Redis transactions](https://redis.io/docs/latest/develop/using-commands/transactions/)、
+[Redis pipelining](https://redis.io/docs/latest/develop/using-commands/pipelining/)，2026-09-28。
+EXEC 执行期单条错误不阻止其他命令，Redis 不回滚；Pipeline 是减少往返，不提供事务隔离。
