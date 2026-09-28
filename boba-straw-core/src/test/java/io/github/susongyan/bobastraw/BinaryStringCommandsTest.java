@@ -92,6 +92,8 @@ class BinaryStringCommandsTest {
 
     @Test
     void preservesMissingEmptyDuplicateAndNonUtf8ResultsInBothProtocols() throws Exception {
+        // Historical name retained for report continuity. This tests both null encodings,
+        // not negotiation: the legacy fixture deliberately stays on RESP2 in both cases.
         int repetitions = Integer.getInteger("boba.straw.binaryDiagnosticRepetitions", 1);
         if (repetitions < 1 || repetitions > 1000) {
             throw new IllegalArgumentException("Binary diagnostic repetitions must be between 1 and 1000");
@@ -103,21 +105,21 @@ class BinaryStringCommandsTest {
 
     private void verifyBinaryReplies() throws Exception {
         for (String nil : new String[] {"$-1\r\n", "_\r\n"}) {
+            java.util.concurrent.atomic.AtomicReference<BinaryFailureEvidence> evidence =
+                new java.util.concurrent.atomic.AtomicReference<BinaryFailureEvidence>();
             try (Server server = new Server(socket -> {
                 readCommand(socket, ascii("MGET"), KEY, KEY, new byte[0], ascii("missing"));
-                socket.getOutputStream().write(ascii("*4\r\n$2\r\n"));
-                socket.getOutputStream().write(VALUE);
-                socket.getOutputStream().write(ascii("\r\n$2\r\n"));
-                socket.getOutputStream().write(VALUE);
-                socket.getOutputStream().write(ascii("\r\n$0\r\n\r\n" + nil));
+                writeBinaryReply(socket, evidence.get(), nil);
                 socket.getOutputStream().flush();
             }); BobaStrawClient client = client(server)) {
+                evidence.set(new BinaryFailureEvidence(client));
                 List<byte[]> values;
                 try {
                     values = await(client.binary().mget(KEY, KEY, new byte[0], ascii("missing")));
                 } catch (Exception error) {
                     // Test-only endpoint/lifecycle evidence, without logging application payloads.
-                    error.addSuppressed(new IllegalStateException(server.diagnosticState()));
+                    error.addSuppressed(new IllegalStateException(server.diagnosticState()
+                        + ", " + evidence.get().snapshot()));
                     throw error;
                 }
                 assertEquals(4, values.size());
@@ -127,6 +129,78 @@ class BinaryStringCommandsTest {
                 assertNull(values.get(3));
                 server.verify();
             }
+        }
+    }
+
+    private static void writeBinaryReply(Socket socket, BinaryFailureEvidence evidence, String nil) throws Exception {
+        evidence.write(socket.getOutputStream(), ascii("*4\r\n$2\r\n"));
+        evidence.write(socket.getOutputStream(), VALUE);
+        evidence.write(socket.getOutputStream(), ascii("\r\n$2\r\n"));
+        evidence.write(socket.getOutputStream(), VALUE);
+        evidence.write(socket.getOutputStream(), ascii("\r\n$0\r\n\r\n" + nil));
+    }
+
+    @Test
+    void negotiatedProtocolUsesMatchingBinaryNullReply() throws Exception {
+        for (ProtocolVersion protocol : new ProtocolVersion[] {ProtocolVersion.RESP2, ProtocolVersion.AUTO}) {
+            java.util.concurrent.atomic.AtomicReference<BinaryFailureEvidence> evidence =
+                new java.util.concurrent.atomic.AtomicReference<BinaryFailureEvidence>();
+            try (Server server = new Server(socket -> {
+                if (protocol == ProtocolVersion.AUTO) {
+                    exchange(socket, "%1\r\n+proto\r\n:3\r\n", ascii("HELLO"), ascii("3"));
+                }
+                readCommand(socket, ascii("MGET"), KEY, KEY, new byte[0], ascii("missing"));
+                writeBinaryReply(socket, evidence.get(), protocol == ProtocolVersion.RESP2 ? "$-1\r\n" : "_\r\n");
+                socket.getOutputStream().flush();
+            }); BobaStrawClient client = BobaStrawClient.builder()
+                    .endpoint("127.0.0.1", server.listener.getLocalPort()).protocol(protocol)
+                    .commandTimeout(Duration.ofSeconds(3)).build()) {
+                evidence.set(new BinaryFailureEvidence(client));
+                try {
+                    List<byte[]> values = await(client.binary().mget(KEY, KEY, new byte[0], ascii("missing")));
+                    assertEquals(4, values.size());
+                    assertArrayEquals(VALUE, values.get(0));
+                    assertArrayEquals(VALUE, values.get(1));
+                    assertArrayEquals(new byte[0], values.get(2));
+                    assertNull(values.get(3));
+                    server.verify();
+                } catch (Exception error) {
+                    error.addSuppressed(new IllegalStateException(server.diagnosticState()
+                        + ", " + evidence.get().snapshot()));
+                    throw error;
+                }
+            }
+        }
+    }
+
+    @Test
+    void syntheticInvalidHIsVisibleInServerSocketAndDecoderEvidence() throws Exception {
+        java.util.concurrent.atomic.AtomicReference<BinaryFailureEvidence> evidence =
+            new java.util.concurrent.atomic.AtomicReference<BinaryFailureEvidence>();
+        try (Server server = new Server(socket -> {
+            readCommand(socket, ascii("MGET"), KEY);
+            evidence.get().write(socket.getOutputStream(), ascii("H\r\n"));
+            socket.getOutputStream().flush();
+        }); BobaStrawClient client = client(server)) {
+            evidence.set(new BinaryFailureEvidence(client));
+            java.util.concurrent.ExecutionException failure = assertThrows(
+                java.util.concurrent.ExecutionException.class, () -> await(client.binary().mget(KEY)));
+            assertTrue(failure.getCause() instanceof BobaStrawCommandMayHaveExecutedException);
+            Throwable root = failure;
+            while (root.getCause() != null) {
+                root = root.getCause();
+            }
+            assertEquals("Unsupported RESP marker: H", root.getMessage());
+            String snapshot = evidence.get().snapshot();
+            assertTrue(snapshot.contains("serverAttempted=480d0a"), snapshot);
+            assertTrue(snapshot.contains("serverWriteCompletedBytes=3"), snapshot);
+            // The decoder may fail as soon as H arrives, before TCP delivers CRLF.
+            assertTrue(snapshot.contains("decoderWindow=48"), snapshot);
+            assertTrue(snapshot.contains("decoderRead=0"), snapshot);
+            // TCP may fragment the three bytes; the last chunk is not necessarily the whole reply.
+            assertTrue(snapshot.contains("lastSocketChunkBytes="), snapshot);
+            assertFalse(snapshot.contains("snapshotUnavailable"), snapshot);
+            server.verify();
         }
     }
 

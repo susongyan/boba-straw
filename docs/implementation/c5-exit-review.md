@@ -59,3 +59,30 @@
 
 主机正式负载预检失败，保留失败记录后仅运行明确标记的高负载分配量诊断，
 没有宣称吞吐/延迟提升；低负载正式网络性能矩阵仍待验收。
+
+## 两项收尾跟进（推送 `2757079` 后）
+
+1. **H 根因：未关闭。** 增加合成服务端写出字节、失败解码器输入窗口与最后一次
+   socket 读取缓冲的有限取证；使用主动注入 H 的用例校验取证链路。
+   JDK 8 下原场景 1,000 轮 / 2,000 连接未复现，不能据此归因或宣布修复。
+   详见 [诊断记录](../testing/binary-resp-diagnostics.md)。
+2. **正式性能：未关闭。** 本轮三次主机预检 load/CPU 为 2.728、2.071、2.994，均超过
+   1.50 门槛；没有关闭门槛，也未启动正式 JMH。需要空闲窗口，不停止其他应用来造条件。
+
+本轮全模块 full 回归 JDK 8 / 21 各 149 tests、零失败/跳过；最终分片断言的两组
+定向回归各 25 tests 通过。测试证据与源码快照差异说明见上述诊断记录。
+
+正式验收先运行同 harness 的 Redis binary GET/SET A/B/B/A，对比 C5 帧优化前后；
+之后以独立结果目录运行 Valkey 对应矩阵。固定基线、候选与 harness，避免 HEAD 漂移：
+
+```sh
+sh scripts/run-ab-benchmarks.sh full redis-binary-large \
+  benchmark-results/c5-binary-redis-formal c49bcdf 706e616 706e616
+sh scripts/run-ab-benchmarks.sh full valkey-binary-large \
+  benchmark-results/c5-binary-valkey-formal c49bcdf 706e616 706e616
+```
+
+选择 JDK 21，串行运行；结果目录必须不存在，复跑时使用新目录。每个参数 3 forks，
+5 × 2s 预热、8 × 2s 测量，吞吐及 sample-time 两模式，保留 GC 分配量、原始 JSON、
+环境与 JAR 哈希。报告波动与不确定性，不预先承诺吞吐/P99 改善。
+该范围验证本次 binary 优化，不替代整个网络模型的全场景性能矩阵。
