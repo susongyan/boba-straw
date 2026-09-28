@@ -306,3 +306,11 @@ Cluster 禁止没有节点绑定的数据库 SCAN，单 Key 三种扫描复用 S
 Java 8 定向 200 轮/400 条独立连接未复现。测试附加端点与服务端状态，保留未来故障线索。
 详情及复跑入口见 [Binary RESP 诊断](../testing/binary-resp-diagnostics.md)。
 原始非法 H 的来源仍待定位，新的通过结果不能作为根因已修复的证明。
+
+### C5 binary / sync typed 第四批
+
+基线 `b95a320`：Standalone binary 普通方法迁入 TypedCommand.binary / BinaryCommandExecutor，
+同步普通方法复用 TypedCommand，但仍等待 transport 并在调用线程解码；专用生命周期不变。
+本批没有新增公共方法，不包含拓扑 binary/sync 或 binary Scan/batch。
+参数深快照增加复制成本，性能基线需后续重测。验收记录见命令覆盖清单；
+C5 最终退出审查及历史非法 H 追踪仍未关闭。

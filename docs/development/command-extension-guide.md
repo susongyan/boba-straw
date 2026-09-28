@@ -79,7 +79,11 @@ String 异步普通方法统一使用 BobaStrawAsyncCommands 的 typed helper，
 每个拓扑的方法；必须补同 Slot/跨 Slot、RESP2/AUTO 与拓扑适用性测试。
 命令参数由调用对象持有快照；不要暴露可修改数组。不要用 thenApply 替代保留取消传播的映射。
 阻塞方法继续单独走 Standalone 专用连接；Cluster/Sentinel facade 拒绝，不可用普通 executor 实现。
-binary/sync 及 Pipeline/事务尚未消费此调用对象，扩展时不能把它当作已完成的全入口统一。
+Standalone binary 普通方法使用 TypedCommand.binary + BinaryCommandExecutor + 共享 decoder，
+参数必须保留原始字节快照；不能用 String 转码来复用文本执行器。
+Standalone 同步普通方法同样构造 TypedCommand，但直接等待 transport 后在调用线程解码。
+Pipeline/事务复用调用对象本地入队，不能因此改为普通 executor 逐条发送。
+拓扑 binary/sync、binary Scan/batch 尚无公开 facade，不能从内部适配抽象推断已经支持。
 
 不要在各 facade 再维护阻塞/状态命令黑名单。新增特殊能力走独立生命周期，不能将注册表属性改成
 ORDINARY 来绕过限制。注册为 read-only 也不授权自动重试；since 记录基础命令版本，不代表所有选项同版本。

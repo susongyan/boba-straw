@@ -10,6 +10,82 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class TypedCommandExecutionTest {
     @Test
+    void binaryInvocationOwnsBothArrayLevelsAndRejectsWrongExecutor() {
+        byte[][] arguments = {new byte[] {(byte) 0xff, 0}, new byte[0]};
+        TypedCommand<byte[]> command = TypedCommand.binary("set", CommandDecoders.BYTES, arguments);
+        arguments[0][0] = 1;
+        arguments[1] = new byte[] {2};
+        byte[][] exposed = command.binaryArguments();
+        exposed[0][1] = 3;
+        exposed[1] = new byte[] {4};
+        assertEquals("SET", command.name());
+        assertArrayEquals(new byte[] {(byte) 0xff, 0}, command.binaryArguments()[0]);
+        assertArrayEquals(new byte[0], command.binaryArguments()[1]);
+        CommandExecutor text = (name, args) -> {
+            fail("Binary command must not reach a text executor");
+            return null;
+        };
+        BinaryCommandExecutor binary = (name, args) -> {
+            fail("Text command must not reach a binary executor");
+            return null;
+        };
+        assertThrows(IllegalStateException.class, () -> text.execute(command));
+        assertThrows(IllegalStateException.class,
+            () -> binary.execute(new TypedCommand<String>("GET", CommandDecoders.STRING, "key")));
+        assertThrows(IllegalArgumentException.class,
+            () -> TypedCommand.binary("MULTI", CommandDecoders.BYTES));
+        assertThrows(IllegalArgumentException.class,
+            () -> TypedCommand.binary("GET", CommandDecoders.BYTES, (byte[]) null));
+        assertThrows(IllegalArgumentException.class,
+            () -> TypedCommand.binary("GET", CommandDecoders.BYTES, (byte[][]) null));
+        assertThrows(IllegalArgumentException.class,
+            () -> TypedCommand.binary("GET", null, new byte[0]));
+    }
+
+    @Test
+    void binaryFacadePreservesBytesCancellationAndFailureWithoutReplay() throws Exception {
+        AtomicInteger submissions = new AtomicInteger();
+        CompletableFuture<RespValue> source = new CompletableFuture<RespValue>();
+        BobaStrawBinaryCommands commands = BobaStrawBinaryCommands.withExecutor((name, args) -> {
+            submissions.incrementAndGet();
+            assertArrayEquals(new byte[] {'G', 'E', 'T'}, name);
+            assertArrayEquals(new byte[] {(byte) 0xff, 0}, args[0]);
+            return source;
+        });
+        assertTrue(commands.get(new byte[] {(byte) 0xff, 0}).toCompletableFuture().cancel(false));
+        assertTrue(source.isCancelled());
+        assertEquals(1, submissions.get());
+
+        CompletableFuture<RespValue> failed = new CompletableFuture<RespValue>();
+        RuntimeException failure = new IllegalStateException("possibly executed");
+        BobaStrawBinaryCommands failing = BobaStrawBinaryCommands.withExecutor((name, args) -> {
+            submissions.incrementAndGet();
+            return failed;
+        });
+        CompletionStage<Long> result = failing.incr(new byte[0]);
+        failed.completeExceptionally(failure);
+        assertSame(failure, assertThrows(ExecutionException.class,
+            () -> result.toCompletableFuture().get()).getCause());
+        assertEquals(2, submissions.get());
+    }
+
+    @Test
+    void binaryValidationPrecedesSubmissionAndMalformedReplyFailsMapping() {
+        AtomicInteger submissions = new AtomicInteger();
+        BobaStrawBinaryCommands commands = BobaStrawBinaryCommands.withExecutor((name, args) -> {
+            submissions.incrementAndGet();
+            return CompletableFuture.completedFuture(new RespValue.SimpleString("not-a-number"));
+        });
+        assertThrows(IllegalArgumentException.class, () -> commands.get(null));
+        assertThrows(IllegalArgumentException.class, () -> commands.set(new byte[0], null));
+        assertThrows(IllegalArgumentException.class, () -> commands.del());
+        assertThrows(IllegalArgumentException.class, () -> commands.mget());
+        assertEquals(0, submissions.get());
+        assertThrows(ExecutionException.class, () -> commands.hlen(new byte[0]).toCompletableFuture().get());
+        assertEquals(1, submissions.get());
+    }
+
+    @Test
     void invocationOwnsArgumentsAndRejectsStateCommands() {
         String[] arguments = {"key"};
         TypedCommand<String> command = new TypedCommand<String>("get", CommandDecoders.STRING, arguments);

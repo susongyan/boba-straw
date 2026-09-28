@@ -5,7 +5,6 @@ import io.github.susongyan.bobastraw.protocol.RespValue;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.CompletionStage;
 
 /** Blocking facade over transport completions from Boba Straw's asynchronous NIO core. */
 public final class BobaStrawSyncCommands {
@@ -84,7 +83,10 @@ public final class BobaStrawSyncCommands {
     }
 
     private <T> T typed(String command, CommandDecoder<T> decoder, String... arguments) {
-        return decoder.apply(client.await(client.executeTransport(command, arguments)));
+        TypedCommand<T> invocation = new TypedCommand<T>(command, decoder, arguments);
+        // Decode on the waiting caller, never on the EventLoop or a callback worker.
+        RespValue response = client.await(client.executeTransport(invocation.name(), invocation.arguments()));
+        return invocation.decoder().apply(response);
     }
 
     public String ping() {
@@ -181,7 +183,7 @@ public final class BobaStrawSyncCommands {
     }
 
     public List<String> keys(String pattern) {
-        return BobaStrawAsyncCommands.stringList(response("KEYS", pattern));
+        return typed("KEYS", BobaStrawAsyncCommands::stringList, pattern);
     }
 
     public String randomKey() {
@@ -197,7 +199,7 @@ public final class BobaStrawSyncCommands {
     }
 
     public Double incrByFloat(String key, double increment) {
-        return asDouble(response("INCRBYFLOAT", key, Double.toString(increment)));
+        return typed("INCRBYFLOAT", BobaStrawSyncCommands::asDouble, key, Double.toString(increment));
     }
 
     public Long decr(String key) {
@@ -221,7 +223,7 @@ public final class BobaStrawSyncCommands {
     }
 
     public List<String> mget(String... keys) {
-        return BobaStrawAsyncCommands.stringList(response("MGET", keys));
+        return typed("MGET", BobaStrawAsyncCommands::stringList, keys);
     }
 
     public String mset(Map<String, String> values) {
@@ -272,7 +274,7 @@ public final class BobaStrawSyncCommands {
     }
 
     public Map<String, String> hgetall(String key) {
-        return BobaStrawAsyncCommands.stringMap(response("HGETALL", key));
+        return typed("HGETALL", BobaStrawAsyncCommands::stringMap, key);
     }
 
     public Long lpush(String key, String... values) {
@@ -284,9 +286,7 @@ public final class BobaStrawSyncCommands {
     }
 
     public List<String> lrange(String key, long start, long stop) {
-        return BobaStrawAsyncCommands.stringList(
-            response("LRANGE", key, Long.toString(start), Long.toString(stop))
-        );
+        return typed("LRANGE", BobaStrawAsyncCommands::stringList, key, Long.toString(start), Long.toString(stop));
     }
 
     public Long sadd(String key, String... members) {
@@ -294,7 +294,7 @@ public final class BobaStrawSyncCommands {
     }
 
     public Set<String> smembers(String key) {
-        return BobaStrawAsyncCommands.stringSet(response("SMEMBERS", key));
+        return typed("SMEMBERS", BobaStrawAsyncCommands::stringSet, key);
     }
 
     public Long zadd(String key, double score, String member) {
@@ -302,9 +302,7 @@ public final class BobaStrawSyncCommands {
     }
 
     public List<String> zrange(String key, long start, long stop) {
-        return BobaStrawAsyncCommands.stringList(
-            response("ZRANGE", key, Long.toString(start), Long.toString(stop))
-        );
+        return typed("ZRANGE", BobaStrawAsyncCommands::stringList, key, Long.toString(start), Long.toString(stop));
     }
 
     public RespValue eval(String script, String[] keys, String... arguments) {
@@ -316,27 +314,19 @@ public final class BobaStrawSyncCommands {
         System.arraycopy(arguments, 0, command, 3 + keys.length, arguments.length);
         String[] tail = new String[command.length - 1];
         System.arraycopy(command, 1, tail, 0, tail.length);
-        return response("EVAL", tail);
+        return typed("EVAL", value -> value, tail);
     }
 
     private String string(String command, String... arguments) {
-        return response(command, arguments).asString();
+        return typed(command, CommandDecoders.STRING, arguments);
     }
 
     private Long number(String command, String... arguments) {
-        return response(command, arguments).asLong();
+        return typed(command, CommandDecoders.LONG, arguments);
     }
 
     private boolean booleanNumber(String command, String... arguments) {
-        return response(command, arguments).asLong() != 0L;
-    }
-
-    private RespValue response(String command, String... arguments) {
-        return client.await(command(command, arguments));
-    }
-
-    private CompletionStage<RespValue> command(String command, String... arguments) {
-        return client.executeTransport(command, arguments);
+        return typed(command, CommandDecoders.BOOLEAN, arguments);
     }
 
     private static double asDouble(RespValue value) {

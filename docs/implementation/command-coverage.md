@@ -308,3 +308,34 @@ JDK 8 定向 21 tests 通过，包含 200 轮、400 条独立连接，未复现 
 报告 `$TMPDIR/boba-straw-compatibility-2lkDyg`。四服务端及拓扑范围沿用上一批。
 当前全量通过记录已恢复，但原错误根因仍未知、问题仍待追踪，不能称为已修复。
 原失败证据继续保留，详见 [Binary RESP 诊断](../testing/binary-resp-diagnostics.md)。
+
+### Binary / sync typed 执行收口（2026-09-28）
+
+基线 `b95a320` + 本批工作树；不新增 Redis 命令/选项，只调整既有执行抽象。
+Standalone binary 普通接口统一使用 TypedCommand.binary / BinaryCommandExecutor / CommandDecoders；
+普通 String 同步接口统一构造 TypedCommand，等待 transport 后在调用线程解码。
+阻塞/事务/Pipeline/订阅生命周期和拓扑范围不变，不新增重试。
+
+适用 CMD-02/03/04/05/09/11/12/13；协议未修改，CMD-06 由既有全量回归覆盖。
+TypedCommandExecutionTest 增加深快照、执行器误配本地拒绝、参数校验、取消传播、异常保留、
+映射失败和无重放测试。既有 BobaStrawClientResourcesTest 验证慢 callback 不阻塞 sync，
+HighFrequencyCommandsCompatibilityTest / BinaryStringCompatibilityTest 继续验证真实字节语义。
+
+公开 Binary/Sync facade 的 `javap -public -s` 与上一轮 Java 8 构建对比无差异；未运行 japicmp。
+无效 binary GET/SET/DEL 的 null 或空 DEL 参数现在本地抛 IllegalArgumentException，合法空字节不受影响。
+统一 decoder 对畸形回复更严格，不是合法服务端返回契约的变化。
+
+Java 8 定向 18 tests 全通过，源码构建目录 `/private/tmp/boba-straw-c5-typed-rufHoM`。
+首次定向构建因包内 null 构造调用与新增 executor 重载歧义编译失败；改为具名内部 factory 后通过，
+未删除旧测试、放宽超时或跳过断言。
+
+全模块根 `mvn clean test` 矩阵（启用真实兼容/Cluster/Sentinel）已通过：
+JDK 8u202 与 21.0.7 各 145 tests，0 failures/errors/skipped，全部模块构建成功。
+证据 `$TMPDIR/boba-straw-compatibility-DpHo3y`，保存源码副本、环境、maven.log 与测试报告；
+已核对副本 core/src 与当前工作树一致。服务端为 Redis 5.0.14/6.2.14/7.4.2、Valkey 8.1.3，
+覆盖 RESP2/AUTO；Cluster/Sentinel 为 Redis 7.4.2。没有复现历史 H，也没有关闭其根因问题。
+
+未验证：本版 binary 大 value JMH、JDK 11/17/25、其他 OS 和独立 Agent 审查。
+输入与执行器参数防御副本增加复制成本，旧网络性能报告不覆盖本次版本。
+剩余：C5 最终退出审查、复制成本优化/重测与历史非法 H 根因追踪；
+Cluster/Sentinel binary/sync、binary Scan/batch 不在本批交付范围。

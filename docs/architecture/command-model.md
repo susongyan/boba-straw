@@ -24,9 +24,11 @@ Cluster 未知命令必须显式声明全部 Key；已知命令不能通过显�
 - `CommandSpec`：命令名、Key 提取规则、连接模式、读写属性；版本信息仅在已核实处记录。
 - `CommandArgs`：String/binary 参数访问，命令名与控制参数使用 ASCII；二进制 Key 不经 UTF-8 往返。
 - `CommandDecoder<T>`：RESP2/RESP3 到结果模型，沿用统一 RespValue；服务端错误由执行内核处理。
-- `TypedCommand<T>`：不可变普通 String 调用，绑定命令名、参数快照与 decoder；复用注册表准入规则。
+- `TypedCommand<T>`：不可变普通 String/binary 调用，绑定命令名、参数快照与 decoder；复用注册表准入规则。
 - `CommandExecutor`：拓扑无关的异步普通执行入口；结果通过 BobaStrawStages.map 映射并传播取消，
   不自行建连接、排队或重试。Standalone/Cluster/Sentinel 由各自既有 executeAsync 适配。
+- `BinaryCommandExecutor`：原始字节执行适配，仅编码 ASCII 命令名；当前只接入 Standalone，
+  不因存在适配接口而宣称支持拓扑 binary。同步 facade 消费同一 TypedCommand，但仍直接等待 transport。
 - `CommandRegistry`：单一元数据表和共享入口策略，Cluster 路由、Standalone/Sentinel Raw、Pipeline/事务校验消费它。
 - `ClusterCommandRouting`：消费 Key 规则计算同 Slot，保留拓扑和重定向的原有职责。
 
@@ -189,3 +191,24 @@ SCAN 系列和 MATCH/COUNT 适用 Redis 5 基线（命令自 2.8 起）；原协
 语义来源：[SCAN](https://redis.io/docs/latest/commands/scan/)、
 [HSCAN](https://redis.io/docs/latest/commands/hscan/)、[ZSCAN](https://redis.io/docs/latest/commands/zscan/)，
 核实日期 2026-09-28。SCAN 官方总述同时说明 SSCAN 的游标、成员返回与 COUNT 语义。
+
+### Binary / sync typed 收口（2026-09-28，第四批）
+
+在前三批基础上，Standalone 的全部既有 binary 普通方法统一使用 TypedCommand.binary、
+BinaryCommandExecutor 和共享 CommandDecoders。命令名保持 ASCII，Key/value 保留原始字节；
+调用对象深复制两层参数数组，读取参数也返回深复制，避免调用方或适配器修改对象内部状态。
+text/binary 执行器误配在发送前拒绝，不做隐式转码。
+
+String 同步普通方法也构造 TypedCommand，沿用 client.executeTransport + await，
+随后在等待的调用线程解码；不改成 async().get()，不在 EventLoop 上映射结果，
+因此 callback worker 被业务 continuation 占住时，同步调用仍可完成。
+BLPOP/BRPOP 继续专用生命周期；EVAL 仍返回 RespValue，不伪造脚本结果类型。
+
+本批没有新增公共方法或扩大拓扑范围。Binary GET/SET/DEL 的 null 参数、空 DEL 现在与其他
+binary 方法一致地本地抛 IllegalArgumentException；合法空字节 key/value 仍允许。
+既有 GET/SET/MGET 等改用共享 decoder，畸形非字符串响应不会被有损转换成字节成功值。
+输入深快照和执行器防御副本增加 payload 复制，尚未做本版 binary 大 value JMH，
+不能引用旧版本约 1x payload copy 的测量作为本版性能结论。
+
+仍不包含 Cluster/Sentinel binary/sync facade、binary Scan/batch；这些不由内部收口自动获得。
+C5 最终退出审查与历史非法 H 根因追踪继续保留，不能把本批测试通过等同问题已修复。
