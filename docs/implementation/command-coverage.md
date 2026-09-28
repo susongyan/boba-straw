@@ -188,3 +188,33 @@ whenComplete 写入的默认 true 标记，存在观察回调尚未结束的竞�
 
 本批公共兼容复核为方法增量/原签名保留与明确的入口行为收紧，未运行 japicmp 发布制品门禁。
 普通入口新增元数据校验，本批没有压测其开销或进行生产长稳，不能沿用旧网络基线宣称零性能影响。
+
+## C5 typed 执行复用第一批（2026-09-28）
+
+基线 `4531b6e` 加本批工作树。内部新增 TypedCommand<T>（普通 text 参数快照、decoder、
+元数据准入）与 CommandExecutor（适配各拓扑既有执行和取消传播）。
+BobaStrawAsyncCommands 普通 String typed 方法全部迁入该入口；EVAL 保持 RespValue，
+BLPOP/BRPOP 保持 Standalone 专用路径。Cluster/Sentinel 新增 async() 并复用相同 facade，
+没有增加自动重试、独立线程或另一套路由实现。
+
+公共 API 为两个 Client 各增加 async()；原公开方法签名保留。Cluster 同 Slot 与无 Key 单主节点
+语义不变；Cluster/Sentinel facade 上的阻塞方法发送前同步抛 UnsupportedOperationException。
+本批不包含 binary/sync 执行统一、Cluster/Sentinel binary、Pipeline/事务 typed 结果与 Scan 页模型。
+
+新增 TypedCommandExecutionTest 三项：参数快照、状态命令拒绝、取消传播、原异常保留且不重放、
+映射异常可终止以及特殊入口不会调用普通 executor。ClusterIntegrationTest/SentinelIntegrationTest
+各新增一项真实两协议 typed 用例，共享 TypedTopologyTestFixture 验证 String/Counter/TTL、
+Hash/List/Set/ZSet、空值/错误和后续响应。既有 ASK 与 Sentinel 切换测试改用 typed GET/SET；
+跨 Slot MGET/RENAME 发送前拒绝。没有新增 Redis 命令形式，语义来源沿用前一批官方记录。
+
+执行 `sh scripts/run-compatibility-matrix.sh full`，传入 Oracle JDK 8u202 与 21.0.7：
+根目录全模块 clean test 各 **126 tests，0 failures/errors/skipped**。
+Standalone 四服务端 Redis 5.0.14/6.2.14/7.4.2、Valkey 8.1.3 RESP2/AUTO，
+Cluster/Sentinel 为既有 Redis 7.4.2 专用测试容器。全部测试串行执行，UUID Key 定点清理。
+证据：`$TMPDIR/boba-straw-compatibility-yL4xiH/run-1`、`run-2`；源码快照 core/src 与最终工作树一致，
+TypedCommand 字节码 major 52。临时目录不是永久发布归档。
+
+CMD-03/05/07/08/09/11/12 按本批范围核对；RESP wire decoder 未改，既有碎片/FIFO/专用连接测试回归。
+兼容性为源码签名复核与 Java 8 编译验证，未执行 japicmp 制品比较、独立 Agent 审查或跨模型验证。
+JDK 11/17/25、其他 OS、长稳及本批性能基线未运行；参数快照增加数组复制，不能宣称零分配/零开销。
+按命令开发 Skill 保留专用入口和明确的未完成清单，C5 整体仍在进行中。

@@ -75,6 +75,11 @@ public final class BobaStrawSentinelClient implements AutoCloseable {
         return new Builder();
     }
 
+    /** Typed ordinary String commands against the discovered primary; no implicit command replay. */
+    public BobaStrawAsyncCommands async() {
+        return new BobaStrawAsyncCommands(this::executeAsync);
+    }
+
     /** Ordinary String commands only. Dedicated/stateful operations need a separate topology API. */
     public CompletionStage<RespValue> executeAsync(String command, String... arguments) {
         validateOrdinary(command, arguments);

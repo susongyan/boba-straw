@@ -16,6 +16,18 @@ import static org.junit.jupiter.api.Assertions.*;
 @EnabledIfSystemProperty(named = "boba.straw.runCluster", matches = "true")
 class ClusterIntegrationTest {
     @Test
+    void typedOrdinaryCommandsReuseRoutingAndDecoders() throws Exception {
+        assertTestContainer();
+        for (ProtocolVersion protocol : new ProtocolVersion[] {ProtocolVersion.RESP2, ProtocolVersion.AUTO}) {
+            try (BobaStrawClusterClient client = cluster(protocol)) {
+                TypedTopologyTestFixture.verify(client.async());
+                assertThrows(IllegalArgumentException.class, () -> client.async().mget("a", "b"));
+                assertThrows(IllegalArgumentException.class, () -> client.async().rename("a", "b"));
+            }
+        }
+    }
+
+    @Test
     void sameSlotCommandsAndMigrationAskWorkWithBothProtocols() throws Exception {
         assertTestContainer();
         for (ProtocolVersion protocol : new ProtocolVersion[] {ProtocolVersion.RESP2, ProtocolVersion.AUTO}) {
@@ -46,8 +58,8 @@ class ClusterIntegrationTest {
                         Throwable error = failure(source.executeAsync("GET", key));
                         assertTrue(error instanceof BobaStrawServerException);
                         assertTrue(error.getMessage().startsWith("ASK " + slot + " "));
-                        assertNull(reply(client.executeAsync("GET", key)).asString());
-                        assertNull(reply(client.executeAsync("GET", key)).asString());
+                        assertNull(TypedTopologyTestFixture.await(client.async().get(key)));
+                        assertNull(TypedTopologyTestFixture.await(client.async().get(key)));
                     } finally {
                         try {
                             reply(source.executeAsync("CLUSTER", "SETSLOT", String.valueOf(slot), "STABLE"));

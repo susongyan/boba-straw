@@ -1,7 +1,7 @@
 # Sentinel 主节点发现与连接生命周期
 
-更新：2026-09-23；核心收尾 C3。这里只覆盖普通 String Raw 命令和主节点连接管理，
-不表示 Sentinel 的 typed/binary facade、Pipeline、事务、阻塞和 Pub/Sub 组合已完成。
+更新：2026-09-28；核心收尾 C3 与 C5 typed 复用。覆盖普通 String Raw、async typed 与主节点连接管理，
+不表示 Sentinel 的 binary/sync facade、Pipeline、事务、阻塞和 Pub/Sub 组合已完成。
 
 ## 接入
 

@@ -74,6 +74,13 @@
 可空数值、RESP3 Double、Hash Map 与 Set 优先复用 CommandDecoders；异步映射继续使用
 BobaStrawStages.map 保留取消传播；同步使用 transport completion，不能等待 callback worker。
 
+String 异步普通方法统一使用 BobaStrawAsyncCommands 的 typed helper，构造 TypedCommand<T>
+并经 CommandExecutor 执行。该 facade 已由 Standalone/Cluster/Sentinel 共同复用，不再复制
+每个拓扑的方法；必须补同 Slot/跨 Slot、RESP2/AUTO 与拓扑适用性测试。
+命令参数由调用对象持有快照；不要暴露可修改数组。不要用 thenApply 替代保留取消传播的映射。
+阻塞方法继续单独走 Standalone 专用连接；Cluster/Sentinel facade 拒绝，不可用普通 executor 实现。
+binary/sync 及 Pipeline/事务尚未消费此调用对象，扩展时不能把它当作已完成的全入口统一。
+
 不要在各 facade 再维护阻塞/状态命令黑名单。新增特殊能力走独立生命周期，不能将注册表属性改成
 ORDINARY 来绕过限制。注册为 read-only 也不授权自动重试；since 记录基础命令版本，不代表所有选项同版本。
 冷门普通命令优先文档化 Raw 用法；未知 Cluster 命令必须显式声明全部 Key。

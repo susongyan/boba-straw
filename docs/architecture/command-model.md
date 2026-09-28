@@ -24,6 +24,9 @@ Cluster 未知命令必须显式声明全部 Key；已知命令不能通过显�
 - `CommandSpec`：命令名、Key 提取规则、连接模式、读写属性；版本信息仅在已核实处记录。
 - `CommandArgs`：String/binary 参数访问，命令名与控制参数使用 ASCII；二进制 Key 不经 UTF-8 往返。
 - `CommandDecoder<T>`：RESP2/RESP3 到结果模型，沿用统一 RespValue；服务端错误由执行内核处理。
+- `TypedCommand<T>`：不可变普通 String 调用，绑定命令名、参数快照与 decoder；复用注册表准入规则。
+- `CommandExecutor`：拓扑无关的异步普通执行入口；结果通过 BobaStrawStages.map 映射并传播取消，
+  不自行建连接、排队或重试。Standalone/Cluster/Sentinel 由各自既有 executeAsync 适配。
 - `CommandRegistry`：单一元数据表和共享入口策略，Cluster 路由、Standalone/Sentinel Raw、Pipeline/事务校验消费它。
 - `ClusterCommandRouting`：消费 Key 规则计算同 Slot，保留拓扑和重定向的原有职责。
 
@@ -86,3 +89,18 @@ C5 退出须同时满足：上述高频范围与明确例外有覆盖表；元�
 本次重新定义编号：旧覆盖清单的“C5.4 Scan/Stream/Geo/HLL/Lua”和“C5.5 更多阻塞”不再作为同名阶段。
 历史 C5.1 报告保留；新编号分别表示“命令元数据化”与“三层 API 边界”。
 实施与测试结果在 [命令覆盖](../implementation/command-coverage.md) 单独登记。
+
+### Typed 执行复用第一批（2026-09-28）
+
+Standalone、Cluster、Sentinel 的 `async()` 复用同一 BobaStrawAsyncCommands：普通 String
+类型化方法统一创建 TypedCommand，再交给 CommandExecutor。EVAL 仍返回 RespValue，
+不猜测脚本结果类型。原有 String 同步接口与 binary 接口保持原路径，本批未统一它们。
+
+Cluster 的多 Key 同 Slot、MOVED/ASK 和 Sentinel 发现/切换均由既有拓扑执行负责，
+不因为引入 typed 层而放宽；取消传回原拓扑 Future。无 Key 命令只访问一个 Cluster 主节点，
+KEYS/RANDOMKEY 不是全集群视图。BLPOP/BRPOP 在该公共 facade 上仅 Standalone 可用，
+Cluster/Sentinel 调用时同步抛 UnsupportedOperationException，发送前拒绝。
+
+该抽象当前仅面向普通 text 命令，不用它直接执行 MULTI/EXEC 或订阅。
+下一批：设计 Pipeline/事务异构结果句柄（保留原 List<RespValue> API）、独立批量生命周期，
+再补 Scan 页结果；binary/sync 的统一与拓扑 binary 支持需分别验证，不能由本批推断已实现。

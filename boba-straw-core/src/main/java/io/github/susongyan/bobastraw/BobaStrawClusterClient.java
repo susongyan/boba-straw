@@ -84,6 +84,11 @@ public final class BobaStrawClusterClient implements AutoCloseable {
         return new Builder();
     }
 
+    /** Typed ordinary String commands, with the same slot checks and redirects as the Raw API. */
+    public BobaStrawAsyncCommands async() {
+        return new BobaStrawAsyncCommands(this::executeAsync);
+    }
+
     public CompletionStage<RespValue> executeAsync(String command, String... arguments) {
         return execute(ClusterCommandRouting.slot(command, arguments), command, arguments);
     }

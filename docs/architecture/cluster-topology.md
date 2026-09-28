@@ -71,7 +71,7 @@ EVAL/EVALSHA 的 numkeys。Hash Tag 与 CRC16 保持一致。扩展命令时必�
 未知模块命令的 Key/状态语义由调用者负责，Raw 不是安全执行任意命令的保证。
 
 拒绝共享入口上的 MULTI/WATCH、订阅、连接状态、已知阻塞命令等；XREAD/XREADGROUP
-暂时整体拒绝，等待专用接口分离 BLOCK 语义。不提供 Cluster typed/binary facade、
+暂时整体拒绝，等待专用接口分离 BLOCK 语义。已提供普通 String async typed facade，尚不提供 binary/sync facade、
 Pipeline、事务、阻塞和订阅入口；这些组合留在 C5/C6 验收。
 
 保留既有 public 方法签名，新增配置/观测/显式 Key 入口。行为收紧：以前猜测第一参数为 Key

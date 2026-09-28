@@ -273,3 +273,11 @@ Scan typed 页结果、旧 mapper 全量迁移、复杂可选参数元数据以�
 本批最终 JDK 8u202/21.0.7 各 121 tests、0 failures/errors/skipped，包含四服务端
 AUTO/RESP2 与原有 Cluster/Sentinel 实测。期间修正一处既有公平性测试的观察 Future 竞态，
 保留原断言/超时；失败与最终报告位置见覆盖清单。没有重写 NIO 调度或宣称压测完成。
+
+### C5 typed 执行复用第一批
+
+基线 `4531b6e`：新增内部 TypedCommand<T>/CommandExecutor，迁移现有异步 String 普通方法，
+并为 Cluster/Sentinel 增加 async()，不复制命令实现。取消仍传播至既有拓扑 Future，
+没有增加自动重试；Standalone 阻塞路径不变，另外两种拓扑的阻塞方法明确本地拒绝。
+本批不包括 binary/sync 执行统一、Pipeline/事务 typed 结果、Scan 页模型，C5 仍在进行中。
+测试结果与证据追加在命令覆盖清单，不将抽象复用标为完整拓扑专用能力完成。

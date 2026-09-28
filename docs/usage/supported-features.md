@@ -13,8 +13,8 @@
 | 事务 helper、懒加载池 | AutoCloseable；取消/失败销毁、成功归还；WATCH 冲突保留空列表兼容行为 | DedicatedConnectionLifecycleTest / DedicatedConnectionCompatibilityTest |
 | 高频 String / binary / Lua | String/Key/TTL/Counter/Bit、Hash/List/Set/ZSet 高频普通命令；String sync/async 和 binary async；Lua 仍为 String EVAL，非全命令全选项 | RedisCompatibilityTest / BinaryStringCommandsTest / BinaryStringCompatibilityTest / HighFrequencyCommandsCompatibilityTest；见[命令覆盖](../implementation/command-coverage.md) |
 | 命令元数据 / 三层入口 | 共用 Key 规则与连接模式；已知状态型/阻塞命令不能经共享 Raw/Pipeline 绕过；Scan typed 页结果仍待完成 | CommandModelTest；见[设计](../architecture/command-model.md) |
-| Cluster | 普通主节点命令：多 seed、Slot/Hash Tag、退避重连、周期/事件刷新、MOVED、独占 ASK、已知多 Key 校验；专用命令和生产长稳仍待完成 | ClusterSlotTest / ClusterLifecycleTest / opt-in ClusterIntegrationTest；详见核心收尾计划 |
-| Sentinel | 普通 String Raw 命令、多 Sentinel 发现、独立认证、ROLE 校验、切换和退避重发现；专用组合待完成 | SentinelLifecycleTest / opt-in SentinelIntegrationTest；详见核心收尾计划 |
+| Cluster | 普通 String async typed 与 Raw；多 seed、Slot/Hash Tag、退避重连、周期/事件刷新、MOVED、独占 ASK、已知多 Key 校验；专用命令和生产长稳仍待完成 | TypedCommandExecutionTest / ClusterSlotTest / ClusterLifecycleTest / opt-in ClusterIntegrationTest；详见核心收尾计划 |
+| Sentinel | 普通 String async typed 与 Raw、多 Sentinel 发现、独立认证、ROLE 校验、切换和退避重发现；专用组合待完成 | TypedCommandExecutionTest / SentinelLifecycleTest / opt-in SentinelIntegrationTest；详见核心收尾计划 |
 | TLS | 未实现，明确后置 | 无 |
 | 阻塞命令专用管理 | Standalone 同步/异步 BLPOP、BRPOP；有界按需单次连接，更多阻塞命令待扩展 | DedicatedConnectionLifecycleTest / DedicatedConnectionCompatibilityTest |
 | Spring Boot | 基础单客户端配置；示例工程及 Boot 版本矩阵尚未验收 | 尚无 SpringContextTest，不作示例已验证声明 |
@@ -23,3 +23,8 @@
 Raw API 是未封装普通命令的出口，不是任意状态型命令安全执行的保证。
 禁止通过共享 Raw/Pipeline 发起 MULTI、WATCH、SUBSCRIBE、SELECT 等改变连接状态的命令。
 缺少合适公开接口时报告能力缺口，不绕过 internal 包。
+
+Cluster/Sentinel 现在可使用 `client.async().get(key)`、`hgetall(key)`、`zscore(key, member)`
+等普通 String typed 方法。复用的 facade 中 BLPOP/BRPOP 仅 Standalone 支持；在另外两种拓扑
+同步抛 UnsupportedOperationException。Cluster 多 Key 仍要求同 Slot；KEYS/RANDOMKEY 等无 Key
+命令只查询一个主节点，不是全集群扫描。未提供 Cluster/Sentinel binary 或同步 facade。

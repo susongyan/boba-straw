@@ -11,12 +11,23 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CompletionStage;
 
-/** Standard Java 8 asynchronous command API; no reactive-library dependency. */
+/**
+ * Standard Java 8 asynchronous String command API; no reactive-library dependency.
+ * Cluster and Sentinel support ordinary commands only; blocking methods reject locally.
+ * Cluster no-key operations address one primary, not the entire cluster.
+ */
 public final class BobaStrawAsyncCommands {
-    private final BobaStrawClient client;
+    private final CommandExecutor executor;
+    private final BobaStrawClient blockingClient;
 
     BobaStrawAsyncCommands(BobaStrawClient client) {
-        this.client = client;
+        this.executor = client::executeAsync;
+        this.blockingClient = client;
+    }
+
+    BobaStrawAsyncCommands(CommandExecutor executor) {
+        this.executor = executor;
+        this.blockingClient = null;
     }
 
     public CompletionStage<Long> bitCount(String key) {
@@ -88,17 +99,17 @@ public final class BobaStrawAsyncCommands {
     }
 
     private <T> CompletionStage<T> typed(String command, CommandDecoder<T> decoder, String... arguments) {
-        return BobaStrawStages.map(client.executeAsync(command, arguments), decoder);
+        return executor.execute(new TypedCommand<T>(command, decoder, arguments));
     }
 
     public CompletionStage<String> ping() {
-        return string(client.executeAsync("PING"));
+        return typed("PING", CommandDecoders.STRING);
     }
 
     /** Returns [key, value], or an empty list on server timeout. Client commandTimeout still applies. */
     public CompletionStage<List<String>> blpop(long timeoutSeconds, String... keys) {
         return BobaStrawStages.map(
-            client.executeBlocking(blockingPopArguments("BLPOP", timeoutSeconds, keys), false),
+            blockingClient().executeBlocking(blockingPopArguments("BLPOP", timeoutSeconds, keys), false),
             BobaStrawAsyncCommands::stringList
         );
     }
@@ -106,7 +117,7 @@ public final class BobaStrawAsyncCommands {
     /** Like blpop, but removes the last element. Uses its own dedicated connection. */
     public CompletionStage<List<String>> brpop(long timeoutSeconds, String... keys) {
         return BobaStrawStages.map(
-            client.executeBlocking(blockingPopArguments("BRPOP", timeoutSeconds, keys), false),
+            blockingClient().executeBlocking(blockingPopArguments("BRPOP", timeoutSeconds, keys), false),
             BobaStrawAsyncCommands::stringList
         );
     }
@@ -127,211 +138,209 @@ public final class BobaStrawAsyncCommands {
         return arguments;
     }
 
+    private BobaStrawClient blockingClient() {
+        if (blockingClient == null) {
+            throw new UnsupportedOperationException("Blocking commands require a Standalone dedicated connection");
+        }
+        return blockingClient;
+    }
+
     public CompletionStage<String> get(String key) {
-        return string(client.executeAsync("GET", key));
+        return typed("GET", CommandDecoders.STRING, key);
     }
 
     public CompletionStage<String> set(String key, String value) {
-        return string(client.executeAsync("SET", key, value));
+        return typed("SET", CommandDecoders.STRING, key, value);
     }
 
     public CompletionStage<String> set(String key, String value, SetArgs options) {
         if (options == null) {
             throw new IllegalArgumentException("SET options must not be null");
         }
-        return string(client.executeAsync("SET", join(key, value, options.arguments())));
+        return typed("SET", CommandDecoders.STRING, join(key, value, options.arguments()));
     }
 
     public CompletionStage<Long> del(String... keys) {
-        return number(client.executeAsync("DEL", keys));
+        return typed("DEL", CommandDecoders.LONG, keys);
     }
 
     public CompletionStage<Long> unlink(String... keys) {
-        return number(client.executeAsync("UNLINK", keys));
+        return typed("UNLINK", CommandDecoders.LONG, keys);
     }
 
     public CompletionStage<Boolean> exists(String key) {
-        return booleanNumber(client.executeAsync("EXISTS", key));
+        return typed("EXISTS", CommandDecoders.BOOLEAN, key);
     }
 
     public CompletionStage<Long> existsCount(String... keys) {
-        return number(client.executeAsync("EXISTS", keys));
+        return typed("EXISTS", CommandDecoders.LONG, keys);
     }
 
     public CompletionStage<String> type(String key) {
-        return string(client.executeAsync("TYPE", key));
+        return typed("TYPE", CommandDecoders.STRING, key);
     }
 
     public CompletionStage<Long> expire(String key, long seconds) {
-        return number(client.executeAsync("EXPIRE", key, Long.toString(seconds)));
+        return typed("EXPIRE", CommandDecoders.LONG, key, Long.toString(seconds));
     }
 
     public CompletionStage<Long> expireAt(String key, long unixSeconds) {
-        return number(client.executeAsync("EXPIREAT", key, Long.toString(unixSeconds)));
+        return typed("EXPIREAT", CommandDecoders.LONG, key, Long.toString(unixSeconds));
     }
 
     public CompletionStage<Long> pexpire(String key, long milliseconds) {
-        return number(client.executeAsync("PEXPIRE", key, Long.toString(milliseconds)));
+        return typed("PEXPIRE", CommandDecoders.LONG, key, Long.toString(milliseconds));
     }
 
     public CompletionStage<Long> pexpireAt(String key, long unixMilliseconds) {
-        return number(client.executeAsync("PEXPIREAT", key, Long.toString(unixMilliseconds)));
+        return typed("PEXPIREAT", CommandDecoders.LONG, key, Long.toString(unixMilliseconds));
     }
 
     public CompletionStage<Long> persist(String key) {
-        return number(client.executeAsync("PERSIST", key));
+        return typed("PERSIST", CommandDecoders.LONG, key);
     }
 
     public CompletionStage<Long> ttl(String key) {
-        return number(client.executeAsync("TTL", key));
+        return typed("TTL", CommandDecoders.LONG, key);
     }
 
     public CompletionStage<Long> pttl(String key) {
-        return number(client.executeAsync("PTTL", key));
+        return typed("PTTL", CommandDecoders.LONG, key);
     }
 
     public CompletionStage<String> rename(String key, String newKey) {
-        return string(client.executeAsync("RENAME", key, newKey));
+        return typed("RENAME", CommandDecoders.STRING, key, newKey);
     }
 
     public CompletionStage<Boolean> renameNx(String key, String newKey) {
-        return booleanNumber(client.executeAsync("RENAMENX", key, newKey));
+        return typed("RENAMENX", CommandDecoders.BOOLEAN, key, newKey);
     }
 
     public CompletionStage<Long> touch(String... keys) {
-        return number(client.executeAsync("TOUCH", keys));
+        return typed("TOUCH", CommandDecoders.LONG, keys);
     }
 
     public CompletionStage<List<String>> keys(String pattern) {
-        return BobaStrawStages.map(client.executeAsync("KEYS", pattern), BobaStrawAsyncCommands::stringList);
+        return typed("KEYS", BobaStrawAsyncCommands::stringList, pattern);
     }
 
     public CompletionStage<String> randomKey() {
-        return string(client.executeAsync("RANDOMKEY"));
+        return typed("RANDOMKEY", CommandDecoders.STRING);
     }
 
     public CompletionStage<Long> incr(String key) {
-        return number(client.executeAsync("INCR", key));
+        return typed("INCR", CommandDecoders.LONG, key);
     }
 
     public CompletionStage<Long> incrBy(String key, long increment) {
-        return number(client.executeAsync("INCRBY", key, Long.toString(increment)));
+        return typed("INCRBY", CommandDecoders.LONG, key, Long.toString(increment));
     }
 
     public CompletionStage<Double> incrByFloat(String key, double increment) {
-        return doubleNumber(client.executeAsync("INCRBYFLOAT", key, Double.toString(increment)));
+        return typed("INCRBYFLOAT", BobaStrawAsyncCommands::asDouble, key, Double.toString(increment));
     }
 
     public CompletionStage<Long> decr(String key) {
-        return number(client.executeAsync("DECR", key));
+        return typed("DECR", CommandDecoders.LONG, key);
     }
 
     public CompletionStage<Long> decrBy(String key, long decrement) {
-        return number(client.executeAsync("DECRBY", key, Long.toString(decrement)));
+        return typed("DECRBY", CommandDecoders.LONG, key, Long.toString(decrement));
     }
 
     public CompletionStage<Long> append(String key, String value) {
-        return number(client.executeAsync("APPEND", key, value));
+        return typed("APPEND", CommandDecoders.LONG, key, value);
     }
 
     public CompletionStage<Long> strlen(String key) {
-        return number(client.executeAsync("STRLEN", key));
+        return typed("STRLEN", CommandDecoders.LONG, key);
     }
 
     public CompletionStage<String> getSet(String key, String value) {
-        return string(client.executeAsync("GETSET", key, value));
+        return typed("GETSET", CommandDecoders.STRING, key, value);
     }
 
     public CompletionStage<List<String>> mget(String... keys) {
-        return BobaStrawStages.map(client.executeAsync("MGET", keys), BobaStrawAsyncCommands::stringList);
+        return typed("MGET", BobaStrawAsyncCommands::stringList, keys);
     }
 
     public CompletionStage<String> mset(Map<String, String> values) {
-        return string(client.executeAsync("MSET", pairs(values)));
+        return typed("MSET", CommandDecoders.STRING, pairs(values));
     }
 
     public CompletionStage<Boolean> msetNx(Map<String, String> values) {
-        return booleanNumber(client.executeAsync("MSETNX", pairs(values)));
+        return typed("MSETNX", CommandDecoders.BOOLEAN, pairs(values));
     }
 
     public CompletionStage<Boolean> setNx(String key, String value) {
-        return booleanNumber(client.executeAsync("SETNX", key, value));
+        return typed("SETNX", CommandDecoders.BOOLEAN, key, value);
     }
 
     public CompletionStage<String> setEx(String key, long seconds, String value) {
-        return string(client.executeAsync("SETEX", key, Long.toString(seconds), value));
+        return typed("SETEX", CommandDecoders.STRING, key, Long.toString(seconds), value);
     }
 
     public CompletionStage<String> psetEx(String key, long milliseconds, String value) {
-        return string(client.executeAsync("PSETEX", key, Long.toString(milliseconds), value));
+        return typed("PSETEX", CommandDecoders.STRING, key, Long.toString(milliseconds), value);
     }
 
     public CompletionStage<String> getRange(String key, long start, long end) {
-        return string(client.executeAsync("GETRANGE", key, Long.toString(start), Long.toString(end)));
+        return typed("GETRANGE", CommandDecoders.STRING, key, Long.toString(start), Long.toString(end));
     }
 
     public CompletionStage<Long> setRange(String key, long offset, String value) {
-        return number(client.executeAsync("SETRANGE", key, Long.toString(offset), value));
+        return typed("SETRANGE", CommandDecoders.LONG, key, Long.toString(offset), value);
     }
 
     public CompletionStage<Long> getBit(String key, long offset) {
-        return number(client.executeAsync("GETBIT", key, Long.toString(offset)));
+        return typed("GETBIT", CommandDecoders.LONG, key, Long.toString(offset));
     }
 
     public CompletionStage<Long> setBit(String key, long offset, long value) {
         if (value != 0 && value != 1) {
             throw new IllegalArgumentException("Redis bit values must be 0 or 1");
         }
-        return number(client.executeAsync("SETBIT", key, Long.toString(offset), Long.toString(value)));
+        return typed("SETBIT", CommandDecoders.LONG, key, Long.toString(offset), Long.toString(value));
     }
 
     public CompletionStage<String> hget(String key, String field) {
-        return string(client.executeAsync("HGET", key, field));
+        return typed("HGET", CommandDecoders.STRING, key, field);
     }
 
     public CompletionStage<Long> hset(String key, String field, String value) {
-        return number(client.executeAsync("HSET", key, field, value));
+        return typed("HSET", CommandDecoders.LONG, key, field, value);
     }
 
     public CompletionStage<Map<String, String>> hgetall(String key) {
-        return BobaStrawStages.map(client.executeAsync("HGETALL", key), BobaStrawAsyncCommands::stringMap);
+        return typed("HGETALL", BobaStrawAsyncCommands::stringMap, key);
     }
 
     public CompletionStage<Long> lpush(String key, String... values) {
-        return number(client.executeAsync("LPUSH", prepend(key, values)));
+        return typed("LPUSH", CommandDecoders.LONG, prepend(key, values));
     }
 
     public CompletionStage<Long> rpush(String key, String... values) {
-        return number(client.executeAsync("RPUSH", prepend(key, values)));
+        return typed("RPUSH", CommandDecoders.LONG, prepend(key, values));
     }
 
     public CompletionStage<List<String>> lrange(String key, long start, long stop) {
-        return BobaStrawStages.map(
-            client.executeAsync("LRANGE", key, Long.toString(start), Long.toString(stop)),
-            BobaStrawAsyncCommands::stringList
-        );
+        return typed("LRANGE", BobaStrawAsyncCommands::stringList, key, Long.toString(start), Long.toString(stop));
     }
 
     public CompletionStage<Long> sadd(String key, String... members) {
-        return number(client.executeAsync("SADD", prepend(key, members)));
+        return typed("SADD", CommandDecoders.LONG, prepend(key, members));
     }
 
     public CompletionStage<Set<String>> smembers(String key) {
-        return BobaStrawStages.map(
-            client.executeAsync("SMEMBERS", key),
-            BobaStrawAsyncCommands::stringSet
-        );
+        return typed("SMEMBERS", BobaStrawAsyncCommands::stringSet, key);
     }
 
     public CompletionStage<Long> zadd(String key, double score, String member) {
-        return number(client.executeAsync("ZADD", key, Double.toString(score), member));
+        return typed("ZADD", CommandDecoders.LONG, key, Double.toString(score), member);
     }
 
     public CompletionStage<List<String>> zrange(String key, long start, long stop) {
-        return BobaStrawStages.map(
-            client.executeAsync("ZRANGE", key, Long.toString(start), Long.toString(stop)),
-            BobaStrawAsyncCommands::stringList
-        );
+        return typed("ZRANGE", BobaStrawAsyncCommands::stringList, key, Long.toString(start), Long.toString(stop));
     }
 
     public CompletionStage<RespValue> eval(String script, String[] keys, String... arguments) {
@@ -341,7 +350,7 @@ public final class BobaStrawAsyncCommands {
         command[2] = Integer.toString(keys.length);
         System.arraycopy(keys, 0, command, 3, keys.length);
         System.arraycopy(arguments, 0, command, 3 + keys.length, arguments.length);
-        return client.executeAsync(command[0], Arrays.copyOfRange(command, 1, command.length));
+        return executor.executeAsync(command[0], Arrays.copyOfRange(command, 1, command.length));
     }
 
     static CompletionStage<String> string(CompletionStage<RespValue> stage) {

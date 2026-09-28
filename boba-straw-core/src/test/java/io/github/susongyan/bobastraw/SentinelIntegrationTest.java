@@ -16,6 +16,16 @@ import static org.junit.jupiter.api.Assertions.*;
 @EnabledIfSystemProperty(named = "boba.straw.runSentinel", matches = "true")
 class SentinelIntegrationTest {
     @Test
+    void typedOrdinaryCommandsUseDiscoveredPrimary() throws Exception {
+        assertTestContainer();
+        for (ProtocolVersion protocol : new ProtocolVersion[] {ProtocolVersion.RESP2, ProtocolVersion.AUTO}) {
+            try (BobaStrawSentinelClient client = builder(protocol).build()) {
+                TypedTopologyTestFixture.verify(client.async());
+            }
+        }
+    }
+
+    @Test
     void authenticatedFailoverPreservesDataAndFindsNewPrimaryWithBothProtocols() throws Exception {
         assertTestContainer();
         for (ProtocolVersion protocol : new ProtocolVersion[] {ProtocolVersion.RESP2, ProtocolVersion.AUTO}) {
@@ -29,12 +39,12 @@ class SentinelIntegrationTest {
                     awaitReplica(replica);
                     ReplicationTestFixture.writeAndAwaitReplica(writer, key, "tea", "5000");
                     try {
-                        assertEquals("tea", reply(client.executeAsync("GET", key)).asString());
+                        assertEquals("tea", TypedTopologyTestFixture.await(client.async().get(key)));
                         assertEquals("OK", reply(sentinel.executeAsync("SENTINEL", "FAILOVER", "tea")).asString());
                         awaitMaster(client, sentinel, replacement);
-                        assertEquals("tea", reply(client.executeAsync("GET", key)).asString());
-                        assertEquals("OK", reply(client.executeAsync("SET", key, "new-primary")).asString());
-                        assertEquals("new-primary", reply(client.executeAsync("GET", key)).asString());
+                        assertEquals("tea", TypedTopologyTestFixture.await(client.async().get(key)));
+                        assertEquals("OK", TypedTopologyTestFixture.await(client.async().set(key, "new-primary")));
+                        assertEquals("new-primary", TypedTopologyTestFixture.await(client.async().get(key)));
                     } finally {
                         // A real switch disconnects old normal clients. Resolve again for cleanup.
                         awaitMaster(client, sentinel, masterPort(sentinel));
