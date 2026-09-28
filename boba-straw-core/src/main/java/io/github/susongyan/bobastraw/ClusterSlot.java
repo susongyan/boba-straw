@@ -30,4 +30,32 @@ public final class ClusterSlot {
         }
         return key.substring(start + 1, end);
     }
+
+    static int ofBytes(byte[] key) {
+        int start = 0;
+        int end = key.length;
+        for (int index = 0; index < key.length; index++) {
+            if (key[index] == '{') {
+                for (int close = index + 1; close < key.length; close++) {
+                    if (key[close] == '}') {
+                        if (close > index + 1) {
+                            start = index + 1;
+                            end = close;
+                        }
+                        break;
+                    }
+                }
+                break;
+            }
+        }
+        int crc = 0;
+        for (int index = start; index < end; index++) {
+            crc ^= (key[index] & 0xff) << 8;
+            for (int bit = 0; bit < 8; bit++) {
+                crc = (crc & 0x8000) == 0 ? crc << 1 : (crc << 1) ^ 0x1021;
+                crc &= 0xffff;
+            }
+        }
+        return crc % 16384;
+    }
 }

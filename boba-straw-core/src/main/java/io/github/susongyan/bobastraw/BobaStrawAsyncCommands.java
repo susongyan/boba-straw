@@ -19,6 +19,78 @@ public final class BobaStrawAsyncCommands {
         this.client = client;
     }
 
+    public CompletionStage<Long> bitCount(String key) {
+        return typed("BITCOUNT", CommandDecoders.LONG, key);
+    }
+
+    public CompletionStage<Long> bitCount(String key, long start, long end) {
+        return typed("BITCOUNT", CommandDecoders.LONG, key, Long.toString(start), Long.toString(end));
+    }
+
+    public CompletionStage<List<String>> hmget(String key, String... fields) {
+        return typed("HMGET", BobaStrawAsyncCommands::stringList, prepend(key, fields));
+    }
+
+    public CompletionStage<Long> hdel(String key, String... fields) {
+        return typed("HDEL", CommandDecoders.LONG, prepend(key, fields));
+    }
+
+    public CompletionStage<Boolean> hexists(String key, String field) {
+        return typed("HEXISTS", CommandDecoders.BOOLEAN, key, field);
+    }
+
+    public CompletionStage<Long> hlen(String key) {
+        return typed("HLEN", CommandDecoders.LONG, key);
+    }
+
+    public CompletionStage<Long> hincrBy(String key, String field, long amount) {
+        return typed("HINCRBY", CommandDecoders.LONG, key, field, Long.toString(amount));
+    }
+
+    public CompletionStage<String> lpop(String key) {
+        return typed("LPOP", CommandDecoders.STRING, key);
+    }
+
+    public CompletionStage<String> rpop(String key) {
+        return typed("RPOP", CommandDecoders.STRING, key);
+    }
+
+    public CompletionStage<Long> llen(String key) {
+        return typed("LLEN", CommandDecoders.LONG, key);
+    }
+
+    public CompletionStage<Long> srem(String key, String... members) {
+        return typed("SREM", CommandDecoders.LONG, prepend(key, members));
+    }
+
+    public CompletionStage<Long> scard(String key) {
+        return typed("SCARD", CommandDecoders.LONG, key);
+    }
+
+    public CompletionStage<Boolean> sismember(String key, String member) {
+        return typed("SISMEMBER", CommandDecoders.BOOLEAN, key, member);
+    }
+
+    public CompletionStage<Long> zrem(String key, String... members) {
+        return typed("ZREM", CommandDecoders.LONG, prepend(key, members));
+    }
+
+    public CompletionStage<Double> zscore(String key, String member) {
+        return typed("ZSCORE", CommandDecoders.NULLABLE_DOUBLE, key, member);
+    }
+
+    public CompletionStage<Long> zcard(String key) {
+        return typed("ZCARD", CommandDecoders.LONG, key);
+    }
+
+    public CompletionStage<Long> zrank(String key, String member) {
+        return typed("ZRANK", CommandDecoders.NULLABLE_LONG, key, member);
+    }
+
+    private <T> CompletionStage<T> typed(String command, CommandDecoder<T> decoder, String... arguments) {
+        return BobaStrawStages.map(client.executeAsync(command, arguments), decoder);
+    }
+
     public CompletionStage<String> ping() {
         return string(client.executeAsync("PING"));
     }

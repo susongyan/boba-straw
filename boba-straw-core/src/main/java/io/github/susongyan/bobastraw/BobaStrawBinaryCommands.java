@@ -91,6 +91,198 @@ public final class BobaStrawBinaryCommands {
         );
     }
 
+    public CompletionStage<Boolean> exists(byte[] key) {
+        return typed("EXISTS", CommandDecoders.BOOLEAN, key);
+    }
+
+    public CompletionStage<Long> existsCount(byte[]... keys) {
+        return typed("EXISTS", CommandDecoders.LONG, keys);
+    }
+
+    public CompletionStage<Long> unlink(byte[]... keys) {
+        return typed("UNLINK", CommandDecoders.LONG, keys);
+    }
+
+    public CompletionStage<String> type(byte[] key) {
+        return typed("TYPE", CommandDecoders.STRING, key);
+    }
+
+    public CompletionStage<Long> expire(byte[] key, long time) {
+        return typed("EXPIRE", CommandDecoders.LONG, key, ascii(Long.toString(time)));
+    }
+
+    public CompletionStage<Long> pexpire(byte[] key, long time) {
+        return typed("PEXPIRE", CommandDecoders.LONG, key, ascii(Long.toString(time)));
+    }
+
+    public CompletionStage<Long> expireAt(byte[] key, long time) {
+        return typed("EXPIREAT", CommandDecoders.LONG, key, ascii(Long.toString(time)));
+    }
+
+    public CompletionStage<Long> pexpireAt(byte[] key, long time) {
+        return typed("PEXPIREAT", CommandDecoders.LONG, key, ascii(Long.toString(time)));
+    }
+
+    public CompletionStage<Long> ttl(byte[] key) {
+        return typed("TTL", CommandDecoders.LONG, key);
+    }
+
+    public CompletionStage<Long> pttl(byte[] key) {
+        return typed("PTTL", CommandDecoders.LONG, key);
+    }
+
+    public CompletionStage<Long> persist(byte[] key) {
+        return typed("PERSIST", CommandDecoders.LONG, key);
+    }
+
+    public CompletionStage<Long> incr(byte[] key) {
+        return typed("INCR", CommandDecoders.LONG, key);
+    }
+
+    public CompletionStage<Long> decr(byte[] key) {
+        return typed("DECR", CommandDecoders.LONG, key);
+    }
+
+    public CompletionStage<Long> incrBy(byte[] key, long amount) {
+        return typed("INCRBY", CommandDecoders.LONG, key, ascii(Long.toString(amount)));
+    }
+
+    public CompletionStage<Long> decrBy(byte[] key, long amount) {
+        return typed("DECRBY", CommandDecoders.LONG, key, ascii(Long.toString(amount)));
+    }
+
+    public CompletionStage<Long> getBit(byte[] key, long offset) {
+        return typed("GETBIT", CommandDecoders.LONG, key, ascii(Long.toString(offset)));
+    }
+
+    public CompletionStage<Long> setBit(byte[] key, long offset, long value) {
+        return typed("SETBIT", CommandDecoders.LONG, key, ascii(Long.toString(offset)), ascii(Long.toString(value)));
+    }
+
+    public CompletionStage<Long> bitCount(byte[] key) {
+        return typed("BITCOUNT", CommandDecoders.LONG, key);
+    }
+
+    public CompletionStage<Long> bitCount(byte[] key, long start, long end) {
+        return typed("BITCOUNT", CommandDecoders.LONG, key, ascii(Long.toString(start)), ascii(Long.toString(end)));
+    }
+
+    public CompletionStage<byte[]> hget(byte[] key, byte[] field) {
+        return typed("HGET", CommandDecoders.BYTES, key, field);
+    }
+
+    public CompletionStage<Long> hset(byte[] key, byte[] field, byte[] value) {
+        return typed("HSET", CommandDecoders.LONG, key, field, value);
+    }
+
+    public CompletionStage<List<byte[]>> hmget(byte[] key, byte[]... fields) {
+        return typed("HMGET", CommandDecoders.BYTE_LIST, prepend(key, fields));
+    }
+
+    /** Field/value entries in server reply order; array keys are not Java Map keys. No sort order is promised. */
+    public CompletionStage<List<java.util.Map.Entry<byte[], byte[]>>> hgetall(byte[] key) {
+        return typed("HGETALL", CommandDecoders.BYTE_ENTRIES, key);
+    }
+
+    public CompletionStage<Long> hdel(byte[] key, byte[]... fields) {
+        return typed("HDEL", CommandDecoders.LONG, prepend(key, fields));
+    }
+
+    public CompletionStage<Boolean> hexists(byte[] key, byte[] field) {
+        return typed("HEXISTS", CommandDecoders.BOOLEAN, key, field);
+    }
+
+    public CompletionStage<Long> hlen(byte[] key) {
+        return typed("HLEN", CommandDecoders.LONG, key);
+    }
+
+    public CompletionStage<Long> hincrBy(byte[] key, byte[] field, long amount) {
+        return typed("HINCRBY", CommandDecoders.LONG, key, field, ascii(Long.toString(amount)));
+    }
+
+    public CompletionStage<Long> lpush(byte[] key, byte[]... values) {
+        return typed("LPUSH", CommandDecoders.LONG, prepend(key, values));
+    }
+
+    public CompletionStage<Long> rpush(byte[] key, byte[]... values) {
+        return typed("RPUSH", CommandDecoders.LONG, prepend(key, values));
+    }
+
+    public CompletionStage<byte[]> lpop(byte[] key) {
+        return typed("LPOP", CommandDecoders.BYTES, key);
+    }
+
+    public CompletionStage<byte[]> rpop(byte[] key) {
+        return typed("RPOP", CommandDecoders.BYTES, key);
+    }
+
+    public CompletionStage<List<byte[]>> lrange(byte[] key, long start, long stop) {
+        return typed("LRANGE", CommandDecoders.BYTE_LIST, key, ascii(Long.toString(start)), ascii(Long.toString(stop)));
+    }
+
+    public CompletionStage<Long> llen(byte[] key) {
+        return typed("LLEN", CommandDecoders.LONG, key);
+    }
+
+    public CompletionStage<Long> sadd(byte[] key, byte[]... members) {
+        return typed("SADD", CommandDecoders.LONG, prepend(key, members));
+    }
+
+    public CompletionStage<Long> srem(byte[] key, byte[]... members) {
+        return typed("SREM", CommandDecoders.LONG, prepend(key, members));
+    }
+
+    /** Redis deduplicates by byte content. A List avoids Java byte[] identity-based Set semantics. */
+    public CompletionStage<List<byte[]>> smembers(byte[] key) {
+        return typed("SMEMBERS", CommandDecoders.BYTE_LIST, key);
+    }
+
+    public CompletionStage<Long> scard(byte[] key) {
+        return typed("SCARD", CommandDecoders.LONG, key);
+    }
+
+    public CompletionStage<Boolean> sismember(byte[] key, byte[] member) {
+        return typed("SISMEMBER", CommandDecoders.BOOLEAN, key, member);
+    }
+
+    public CompletionStage<Long> zadd(byte[] key, double score, byte[] member) {
+        return typed("ZADD", CommandDecoders.LONG, key, ascii(Double.toString(score)), member);
+    }
+
+    public CompletionStage<Long> zrem(byte[] key, byte[]... members) {
+        return typed("ZREM", CommandDecoders.LONG, prepend(key, members));
+    }
+
+    public CompletionStage<List<byte[]>> zrange(byte[] key, long start, long stop) {
+        return typed("ZRANGE", CommandDecoders.BYTE_LIST, key, ascii(Long.toString(start)), ascii(Long.toString(stop)));
+    }
+
+    public CompletionStage<Double> zscore(byte[] key, byte[] member) {
+        return typed("ZSCORE", CommandDecoders.NULLABLE_DOUBLE, key, member);
+    }
+
+    public CompletionStage<Long> zcard(byte[] key) {
+        return typed("ZCARD", CommandDecoders.LONG, key);
+    }
+
+    public CompletionStage<Long> zrank(byte[] key, byte[] member) {
+        return typed("ZRANK", CommandDecoders.NULLABLE_LONG, key, member);
+    }
+
+    private <T> CompletionStage<T> typed(String command, CommandDecoder<T> decoder, byte[]... arguments) {
+        return BobaStrawStages.map(execute(command, arguments), decoder);
+    }
+
+    private static byte[][] prepend(byte[] key, byte[][] values) {
+        if (values == null || values.length == 0) {
+            throw new IllegalArgumentException("At least one field, value or member is required");
+        }
+        byte[][] result = new byte[values.length + 1][];
+        result[0] = key;
+        System.arraycopy(values, 0, result, 1, values.length);
+        return result;
+    }
+
     private CompletionStage<RespValue> execute(String command, byte[]... arguments) {
         if (arguments == null || arguments.length == 0) {
             throw new IllegalArgumentException(command + " requires arguments");

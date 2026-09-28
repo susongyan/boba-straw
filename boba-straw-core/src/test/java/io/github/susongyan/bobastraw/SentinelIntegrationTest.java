@@ -27,8 +27,7 @@ class SentinelIntegrationTest {
                 try (BobaStrawClient writer = admin(original, "boba-test-data");
                      BobaStrawClient replica = admin(replacement, "boba-test-data")) {
                     awaitReplica(replica);
-                    reply(writer.executeAsync("SET", key, "tea"));
-                    assertEquals(1, reply(writer.executeAsync("WAIT", "1", "5000")).asLong());
+                    ReplicationTestFixture.writeAndAwaitReplica(writer, key, "tea", "5000");
                     try {
                         assertEquals("tea", reply(client.executeAsync("GET", key)).asString());
                         assertEquals("OK", reply(sentinel.executeAsync("SENTINEL", "FAILOVER", "tea")).asString());

@@ -5,7 +5,6 @@ import io.github.susongyan.bobastraw.internal.NioConnection;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Locale;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.function.Function;
@@ -34,35 +33,7 @@ public final class BobaStrawTransaction implements AutoCloseable {
         if (name == null || name.isEmpty() || arguments == null) {
             throw new IllegalArgumentException("Transaction command and arguments are required");
         }
-        String normalized = name.toUpperCase(Locale.ROOT);
-        switch (normalized) {
-            case "MULTI":
-            case "EXEC":
-            case "DISCARD":
-            case "WATCH":
-            case "UNWATCH":
-            case "SELECT":
-            case "AUTH":
-            case "HELLO":
-            case "CLIENT":
-            case "QUIT":
-            case "RESET":
-            case "READONLY":
-            case "READWRITE":
-            case "ASKING":
-            case "SUBSCRIBE":
-            case "PSUBSCRIBE":
-            case "SSUBSCRIBE":
-            case "UNSUBSCRIBE":
-            case "PUNSUBSCRIBE":
-            case "SUNSUBSCRIBE":
-            case "MONITOR":
-            case "SYNC":
-            case "PSYNC":
-                throw new IllegalArgumentException("Connection-state command is not allowed: " + name);
-            default:
-                break;
-        }
+        CommandRegistry.requireTransaction(name, CommandArgs.text(arguments));
         String[] command = new String[arguments.length + 1];
         command[0] = name;
         for (int index = 0; index < arguments.length; index++) {

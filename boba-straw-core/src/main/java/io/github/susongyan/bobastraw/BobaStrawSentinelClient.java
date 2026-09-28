@@ -9,7 +9,6 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
-import java.util.Locale;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 
@@ -421,22 +420,7 @@ public final class BobaStrawSentinelClient implements AutoCloseable {
     }
 
     private static void validateOrdinary(String command, String[] arguments) {
-        if (command == null || command.isEmpty() || arguments == null) {
-            throw new IllegalArgumentException("Command and arguments are required");
-        }
-        String name = command.toUpperCase(Locale.ROOT);
-        String stateful = " MULTI EXEC DISCARD WATCH UNWATCH SELECT AUTH HELLO CLIENT QUIT RESET "
-            + "READONLY READWRITE ASKING SUBSCRIBE PSUBSCRIBE SSUBSCRIBE UNSUBSCRIBE PUNSUBSCRIBE "
-            + "SUNSUBSCRIBE MONITOR SYNC PSYNC BLPOP BRPOP BRPOPLPUSH BLMOVE BLMPOP BZPOPMIN "
-            + "BZPOPMAX BZMPOP XREAD XREADGROUP WAIT WAITAOF ";
-        if (name.indexOf(' ') >= 0 || stateful.contains(" " + name + " ")) {
-            throw new IllegalArgumentException("Command requires a dedicated Sentinel API: " + command);
-        }
-        for (String argument : arguments) {
-            if (argument == null) {
-                throw new IllegalArgumentException("Null command argument");
-            }
-        }
+        CommandRegistry.requireOrdinary(command, CommandArgs.text(arguments));
     }
 
     private static final class Endpoint {

@@ -9,6 +9,10 @@ Boba Straw is a lightweight, pure Java Redis and Valkey client. It uses a Java N
 维护者使用 AI 扩展 Redis 命令时，见[命令扩展开发指南](docs/development/command-extension-guide.md)
 及仓库内的 [Command Development Skill](.agents/skills/boba-straw-command-development/SKILL.md)。
 
+C5 聚焦主要数据结构的高频 API，不追求全 Redis 命令覆盖。三层接口与命令元数据设计见
+[命令模型与演进](docs/architecture/command-model.md)，实际实现/测试范围见
+[命令覆盖清单](docs/implementation/command-coverage.md)。
+
 `0.1.0-SNAPSHOT` provides a standalone NIO client with RESP2/RESP3 negotiation and synchronous/`CompletionStage` APIs. Key and String coverage includes conditional/expiring `SET`, `MGET`/`MSET`, counters, range and bit operations, expiry management, rename and type commands; Hash, List, Set and sorted-set currently provide their basic operations. Pipeline, dedicated transaction/Pub/Sub connections and scripts have basic implementations. Cluster and Sentinel support ordinary primary commands and topology recovery; their dedicated-command combinations, production endurance validation and TLS remain incomplete.
 
 ```java

@@ -49,3 +49,10 @@ Standalone 已达到基础验收。Cluster 普通主节点命令具有节点退�
 这不包含 Cluster 事务/Pipeline/Pub/Sub/阻塞接口，也不等于生产长稳验收。
 Sentinel 普通主节点命令通过独立入口实现：重新发现、同连接 ROLE 校验、两套认证与旧连接退休；
 见 [sentinel-topology.md](sentinel-topology.md)。专用组合留待 C6，TLS 仍未实现。
+
+## Command surface
+
+C5 以主要数据结构的高频 API 为目标，不追求全量 Redis 命令。CommandRegistry 提供内部
+Key/连接模式元数据，Typed、特殊能力与 Raw 共享既有执行内核；三层边界见
+[command-model.md](command-model.md)。已知状态/阻塞命令不能经普通 Raw/Pipeline 或事务
+普通 command 入队绕过专用生命周期；未知普通 Raw 出口由调用方核实副作用，Cluster 显式全部 Key。

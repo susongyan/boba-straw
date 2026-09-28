@@ -73,8 +73,7 @@ class ClusterIntegrationTest {
                  BobaStrawClusterClient client = cluster(ProtocolVersion.AUTO, primary)) {
                 assertFalse(client.nodeMetrics().containsKey("[127.0.0.1]:" + replica));
                 try {
-                    reply(writer.executeAsync("SET", key, "retained"));
-                    assertEquals(1, reply(writer.executeAsync("WAIT", "1", "2000")).asLong());
+                    ReplicationTestFixture.writeAndAwaitReplica(writer, key, "retained", "2000");
                     reply(promoted.executeAsync("CLUSTER", "FAILOVER"));
                     awaitOwner(discovery, ClusterSlot.of(key), replica);
                     awaitClientNode(client, replica);
@@ -99,8 +98,7 @@ class ClusterIntegrationTest {
             try (BobaStrawClient writer = admin(primary); BobaStrawClient observer = admin(replica);
                  BobaStrawClusterClient client = cluster(ProtocolVersion.RESP2, primary)) {
                 assertFalse(client.nodeMetrics().containsKey("[127.0.0.1]:" + replica));
-                reply(writer.executeAsync("SET", key, "survives"));
-                assertEquals(1, reply(writer.executeAsync("WAIT", "1", "2000")).asLong());
+                ReplicationTestFixture.writeAndAwaitReplica(writer, key, "survives", "2000");
                 // SIGSTOP makes both client traffic and Cluster heartbeat unavailable. Always resume.
                 try {
                     signal(primary, "STOP");

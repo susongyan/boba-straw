@@ -186,10 +186,12 @@ public final class BobaStrawClient implements AutoCloseable {
     }
 
     public CompletionStage<RespValue> executeAsync(String command, String... arguments) {
+        CommandRegistry.requireOrdinary(command, CommandArgs.text(arguments));
         return executeOn(sharedConnection(), command, arguments);
     }
 
     public CompletionStage<RespValue> executeBinaryAsync(byte[] command, byte[]... arguments) {
+        CommandRegistry.requireOrdinary(CommandArgs.commandName(command), CommandArgs.binary(arguments));
         byte[][] all = new byte[arguments.length + 1][];
         all[0] = command;
         System.arraycopy(arguments, 0, all, 1, arguments.length);
@@ -217,6 +219,7 @@ public final class BobaStrawClient implements AutoCloseable {
     }
 
     CompletionStage<RespValue> executeTransport(String command, String... arguments) {
+        CommandRegistry.requireOrdinary(command, CommandArgs.text(arguments));
         String[] all = new String[arguments.length + 1];
         all[0] = command;
         System.arraycopy(arguments, 0, all, 1, arguments.length);
@@ -224,6 +227,13 @@ public final class BobaStrawClient implements AutoCloseable {
     }
 
     CompletionStage<List<RespValue>> executeBatch(List<String[]> commands) {
+        for (String[] command : commands) {
+            if (command == null || command.length == 0) {
+                throw new IllegalArgumentException("Pipeline command is required");
+            }
+            CommandRegistry.requireOrdinary(command[0], CommandArgs.text(
+                java.util.Arrays.copyOfRange(command, 1, command.length)));
+        }
         return sharedConnection().executeBatch(commands);
     }
 

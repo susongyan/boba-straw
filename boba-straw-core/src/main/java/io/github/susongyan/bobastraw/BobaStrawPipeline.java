@@ -23,6 +23,7 @@ public final class BobaStrawPipeline {
         if (executed.get()) {
             throw new IllegalStateException("Pipeline has already been executed");
         }
+        CommandRegistry.requireOrdinary(name, CommandArgs.text(arguments));
         String[] command = new String[arguments.length + 1];
         command[0] = name;
         System.arraycopy(arguments, 0, command, 1, arguments.length);

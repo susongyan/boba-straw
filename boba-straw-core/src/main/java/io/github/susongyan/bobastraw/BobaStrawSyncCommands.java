@@ -15,6 +15,78 @@ public final class BobaStrawSyncCommands {
         this.client = client;
     }
 
+    public Long bitCount(String key) {
+        return typed("BITCOUNT", CommandDecoders.LONG, key);
+    }
+
+    public Long bitCount(String key, long start, long end) {
+        return typed("BITCOUNT", CommandDecoders.LONG, key, Long.toString(start), Long.toString(end));
+    }
+
+    public List<String> hmget(String key, String... fields) {
+        return typed("HMGET", BobaStrawAsyncCommands::stringList, prepend(key, fields));
+    }
+
+    public Long hdel(String key, String... fields) {
+        return typed("HDEL", CommandDecoders.LONG, prepend(key, fields));
+    }
+
+    public Boolean hexists(String key, String field) {
+        return typed("HEXISTS", CommandDecoders.BOOLEAN, key, field);
+    }
+
+    public Long hlen(String key) {
+        return typed("HLEN", CommandDecoders.LONG, key);
+    }
+
+    public Long hincrBy(String key, String field, long amount) {
+        return typed("HINCRBY", CommandDecoders.LONG, key, field, Long.toString(amount));
+    }
+
+    public String lpop(String key) {
+        return typed("LPOP", CommandDecoders.STRING, key);
+    }
+
+    public String rpop(String key) {
+        return typed("RPOP", CommandDecoders.STRING, key);
+    }
+
+    public Long llen(String key) {
+        return typed("LLEN", CommandDecoders.LONG, key);
+    }
+
+    public Long srem(String key, String... members) {
+        return typed("SREM", CommandDecoders.LONG, prepend(key, members));
+    }
+
+    public Long scard(String key) {
+        return typed("SCARD", CommandDecoders.LONG, key);
+    }
+
+    public Boolean sismember(String key, String member) {
+        return typed("SISMEMBER", CommandDecoders.BOOLEAN, key, member);
+    }
+
+    public Long zrem(String key, String... members) {
+        return typed("ZREM", CommandDecoders.LONG, prepend(key, members));
+    }
+
+    public Double zscore(String key, String member) {
+        return typed("ZSCORE", CommandDecoders.NULLABLE_DOUBLE, key, member);
+    }
+
+    public Long zcard(String key) {
+        return typed("ZCARD", CommandDecoders.LONG, key);
+    }
+
+    public Long zrank(String key, String member) {
+        return typed("ZRANK", CommandDecoders.NULLABLE_LONG, key, member);
+    }
+
+    private <T> T typed(String command, CommandDecoder<T> decoder, String... arguments) {
+        return decoder.apply(client.await(client.executeTransport(command, arguments)));
+    }
+
     public String ping() {
         return string("PING");
     }
