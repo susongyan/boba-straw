@@ -1,8 +1,19 @@
 # Skill 分发与发布约定
 
-## 使用方导入
+## 当前可用方式
 
-离线 ZIP 内有 boba-straw-usage/，包含 Skill、references、assets/examples、manifest.json、
+当前仅有仓库内 Skill、usage-skill.json 与 docs/usage 文档；离线 ZIP、独立示例工程、
+usage_bundle.py、validator.py 和市场发布产物尚未实现或发布。
+不能执行尚不存在的打包/校验命令，也不能声称当前 CI 已生成离线产物。
+
+源码仓库内让 AI 读取 `.agents/skills/boba-straw-usage/SKILL.md` 即可。
+企业业务项目使用时，固定源码提交、复制该 Skill 及其全部引用文档并保留相对目录关系，
+或由项目规则明确指向受控的规范副本；记录实际 SDK 制品来源并人工核对版本。
+不要只复制 SKILL.md 后留下失效链接。未来打包工具完成后再迁移到下述离线分发方式。
+
+## 使用方导入（以下为待实现的离线包设计）
+
+计划中的离线 ZIP 内有 boba-straw-usage/，包含 Skill、references、assets/examples、manifest.json、
 SHA256SUMS 和 validator.py。整体导入业务仓库的工具约定目录；不要只复制 SKILL.md。
 不支持 Skill 的工具可用项目指令引用 references/quickstart.md。
 
@@ -20,9 +31,9 @@ SHA256SUMS 和 validator.py。整体导入业务仓库的工具约定目录；�
 企业补充规则单独维护，引用固定 Skill 版本与包摘要；不得改写客户端真实失败语义。
 Skill 指令不能覆盖业务仓库授权边界，不能自行发布、发送消息或批量更新依赖。
 
-## 维护方打包
+## 维护方打包（计划，当前不可执行）
 
-`python3 scripts/usage_bundle.py build --output target/usage-bundles` 从干净 Git 提交生成 ZIP。
+拟提供 `python3 scripts/usage_bundle.py build --output target/usage-bundles` 从干净 Git 提交生成 ZIP。
 版本源为 usage-skill.json，Skill 独立版本，SDK 支持版本是显式验证清单，不是推测的范围。
 SNAPSHOT 与当前源码提交绑定。Skill 修改时更新独立版本；同名制品不得覆盖。
 产物包含规范快照，示例从可编译源码复制；只有源文档需要编辑。
@@ -47,5 +58,5 @@ licenseStatus、channels。所有适配器读取此文件和 ZIP，先重新验�
 不得把 token 写入 manifest、ZIP 或日志。首版只有渠道合同，没有虚构注册中心 API 或网络上传命令。
 
 当前 licenseStatus=undecided，publicPublishAllowed=false。公开发布前必须明确 Skill、文档和
-示例授权并满足目标市场要求；企业私有分发同样需要组织批准。本次 CI 仅保存构建产物，
+示例授权并满足目标市场要求；企业私有分发同样需要组织批准。未来 CI 计划仅保存构建产物，
 不自动提交企业仓库或公开发布。转换后的市场包若内容发生变化，需要单独摘要和验证记录。

@@ -31,14 +31,13 @@ WATCH/UNWATCH 必须等待其 CompletionStage 完成，再开始下一操作；�
 成功 EXEC 或 discard 的 UNWATCH 确认后归还；取消、超时、错误或放弃时销毁连接，不重放事务。
 discard 清理本地命令和 WATCH；本实现仅在 exec 时才发送 MULTI。
 close/取消不能证明 EXEC 未执行。EXEC 内的错误值不导致其他命令回滚。
-为保持兼容，WATCH 冲突仍返回空列表，与空事务成功的空列表无法区分；需要业务自行保留上下文。
+新代码推荐 `transaction.typed()` 入队、`execTyped()` 提交：先检查结果的 `isAborted()`，
+WATCH 冲突时不要读取句柄；未冲突再通过 `result.get(handle)` 获取结果，逐条处理服务端错误。
+只有旧 Raw `exec()` 为保持兼容仍将 WATCH 冲突返回为空列表，不能与空事务成功区分。
+完整示例见[命令、批量与分页](commands.md)。普通 sync()/async()/binary() 不需要 typed()。
 
-```java
-try (BobaStrawTransaction transaction = client.transaction()) {
-    transaction.watch("key").toCompletableFuture().join();
-    transaction.command("SET", "key", "value").exec().toCompletableFuture().join();
-}
-```
+示例中的 join() 仅用于允许阻塞的调用线程；若用异步编排，应等待 watch 完成后再提交事务，
+并明确异常、取消和 close 的路径，不能在异步提交尚未结束时退出 try-with-resources。
 
 ## 阻塞 List 命令
 

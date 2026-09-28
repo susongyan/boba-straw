@@ -19,3 +19,15 @@ join/get 可能包装异常，检查 CompletionException/ExecutionException 的 
 
 Pipeline 不保证原子性；整体 Future 失败时，部分命令可能已经执行。
 事务 EXEC 内单条命令错误也不意味着其他命令被回滚。业务重试策略必须结合具体操作定义。
+
+## 批量结果分两层处理
+
+- `executeTyped()/execTyped()` 的 Stage 异常：整批结果未正常交付；可能已有命令执行。
+- Stage 成功：逐条 `result.get(handle)` 仍可能抛 BobaStrawServerException；不能把 Stage 成功当作全部成功。
+- 事务 `isAborted()` 为 true：WATCH 冲突导致事务未执行，不是网络不确定失败；由业务决定冲突处理，
+  客户端不会自动重试。成功的空事务为 false。冲突时不能读取句柄。
+- 旧 Pipeline `execute()` 的单条服务端错误仍使整批 Stage 异常；旧事务 `exec()` 则在数组内保留错误，
+  WATCH 冲突返回空列表。不要将新旧入口的结果契约混用。
+
+示例见[命令、批量与分页](commands.md)。协议解析异常会关闭物理连接；
+如果命令字节已写出，仍按“可能已执行”处理，不因异常来自客户端就认定 Redis 没执行。

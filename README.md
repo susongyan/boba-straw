@@ -6,6 +6,10 @@ Boba Straw is a lightweight, pure Java Redis and Valkey client. It uses a Java N
 
 ## Current status
 
+应用研发先看[接入指南](docs/usage/quickstart.md)、[普通命令、批量与分页](docs/usage/commands.md)
+和[能力表](docs/usage/supported-features.md)。普通命令直接调用 sync()/async()/binary()；
+typed() 仅用于 Pipeline/事务的类型化入队，不是全局开关。
+
 维护者使用 AI 扩展 Redis 命令时，见[命令扩展开发指南](docs/development/command-extension-guide.md)
 及仓库内的 [Command Development Skill](.agents/skills/boba-straw-command-development/SKILL.md)。
 

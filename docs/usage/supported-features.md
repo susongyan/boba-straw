@@ -19,7 +19,7 @@
 | TLS | 未实现，明确后置 | 无 |
 | 阻塞命令专用管理 | Standalone 同步/异步 BLPOP、BRPOP；有界按需单次连接，更多阻塞命令待扩展 | DedicatedConnectionLifecycleTest / DedicatedConnectionCompatibilityTest |
 | Spring Boot | 基础单客户端配置；示例工程及 Boot 版本矩阵尚未验收 | 尚无 SpringContextTest，不作示例已验证声明 |
-| Codec SPI / Health / Metrics / 多客户端自动配置 | 未完成；冷门命令不追求全部 typed 化，普通 Raw 作为出口 | 不生成虚构 API |
+| Codec SPI / Health / Micrometer / 多客户端自动配置 | 未完成；核心 Client 已有 metrics() 快照，不等于 Starter 的 Micrometer 集成；冷门普通命令保留 Raw 出口 | 不生成虚构 API |
 
 Raw API 是未封装普通命令的出口，不是任意状态型命令安全执行的保证。
 禁止通过共享 Raw/Pipeline 发起 MULTI、WATCH、SUBSCRIBE、SELECT 等改变连接状态的命令。
@@ -30,6 +30,7 @@ Cluster/Sentinel 现在可使用 `client.async().get(key)`、`hgetall(key)`、`z
 同步抛 UnsupportedOperationException。Cluster 多 Key 仍要求同 Slot；KEYS/RANDOMKEY 等无 Key
 命令只查询一个主节点，不是全集群扫描。未提供 Cluster/Sentinel binary 或同步 facade。
 
-批量 typed 用法见[命令模型及示例](../architecture/command-model.md)。句柄不独立执行/取消；
+普通 sync()/async()/binary() 方法直接返回相应结果或 Stage，不需要调用 typed()。
+批量 typed 用法见[命令、批量与分页](commands.md)。句柄不独立执行/取消；
 取消整个执行 Stage 不证明服务端未执行。单条错误在 result.get(handle) 抛出，不应忽略整批其他结果。
 仅 Standalone String 初始高频目录，不代表所有 async 方法都已有批量 typed 对应项。

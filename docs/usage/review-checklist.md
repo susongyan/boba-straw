@@ -4,7 +4,7 @@
 
 | 编号 | 严重程度 | 检查内容 | 判定方式 |
 | --- | --- | --- | --- |
-| BSU001 | error | 业务生产代码依赖 internal 包 | ArchUnit 自动阻断 |
+| BSU001 | error | 业务生产代码依赖 internal 包 | AI/代码审查；业务 CI 可增加架构规则，当前仓库未提供自动阻断模板 |
 | BSU002 | warning | Client 在高频请求内重复构建/关闭 | AI 结合生命周期判断；短任务允许 |
 | BSU003 | error | 关闭注入/共享的 Client、提前关闭共享 Resources | AI 核对所有权 |
 | BSU004 | error | 不确定执行后无条件重试写命令、吞掉异常假成功 | AI 核对失败路径 |
@@ -19,9 +19,9 @@
 每条发现输出：规则编号、确定违规/需人工判断/未验证、严重程度、文件及行号、代码证据、影响、
 建议、验证命令。没有证据时标记未验证，不能宣称扫描过整个项目。
 
-ArchUnit 模板在示例 java 模块的 PublicApiBoundaryTest，固定 ArchUnit 1.3.0（test scope）。
-复制到业务项目并把包名 com.example.boba 改成自己的生产包；仅导入生产 classes，不扫描依赖 JAR。
-RulesVerificationTest 通过正反例验证规则本身。该检查不检测反射访问，也不能证明没有连接泄漏。
+当前没有独立 examples 模块、PublicApiBoundaryTest 或 RulesVerificationTest。
+企业可在自己的 CI 中增加 internal 包依赖检查，并用正反例验证规则；不要把导入 Skill
+当成已启用机械门禁。静态依赖检查也不能证明没有反射访问或连接泄漏。
 
 ## 行为验收卡
 
