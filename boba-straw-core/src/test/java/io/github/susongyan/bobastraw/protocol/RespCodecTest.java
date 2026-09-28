@@ -19,6 +19,44 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class RespCodecTest {
+    @Test
+    void binaryAggregateSurvivesEveryThreeFragmentBoundaryAndFollowingReply() throws Exception {
+        for (String nil : new String[] {"$-1\r\n", "_\r\n"}) {
+            ByteArrayOutputStream wire = new ByteArrayOutputStream();
+            wire.write(ascii("*4\r\n$2\r\n"));
+            wire.write(new byte[] {(byte) 0xfe, 0});
+            wire.write(ascii("\r\n$2\r\n"));
+            wire.write(new byte[] {(byte) 0xfe, 0});
+            wire.write(ascii("\r\n$0\r\n\r\n" + nil + ":7\r\n"));
+            byte[] bytes = wire.toByteArray();
+            for (int first = 0; first <= bytes.length; first++) {
+                for (int second = first; second <= bytes.length; second++) {
+                    RespCodec.Decoder decoder = new RespCodec.Decoder();
+                    List<RespValue> replies = new ArrayList<RespValue>();
+                    int offset = 0;
+                    for (int end : new int[] {first, second, bytes.length}) {
+                        byte[] chunk = Arrays.copyOfRange(bytes, offset, end);
+                        decoder.feed(chunk, chunk.length);
+                        Arrays.fill(chunk, (byte) 'H'); // Caller is allowed to reuse the read buffer.
+                        RespValue reply;
+                        while ((reply = decoder.poll()) != null) {
+                            replies.add(reply);
+                        }
+                        offset = end;
+                    }
+                    assertEquals(2, replies.size(), "boundaries " + first + "/" + second);
+                    List<RespValue> items = ((RespValue.Array) replies.get(0)).values;
+                    assertEquals(4, items.size());
+                    assertArrayEquals(new byte[] {(byte) 0xfe, 0}, ((RespValue.BlobString) items.get(0)).value);
+                    assertArrayEquals(new byte[] {(byte) 0xfe, 0}, ((RespValue.BlobString) items.get(1)).value);
+                    assertArrayEquals(new byte[0], ((RespValue.BlobString) items.get(2)).value);
+                    assertSame(RespValue.Null.INSTANCE, items.get(3));
+                    assertEquals(7, replies.get(1).asLong());
+                }
+            }
+        }
+    }
+
     @Test void decodesFragmentedBlobString() {
         RespCodec.Decoder decoder = new RespCodec.Decoder();
         byte[] reply = "$5\r\nhello\r\n".getBytes(StandardCharsets.US_ASCII);

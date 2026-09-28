@@ -298,3 +298,13 @@ Standalone/Sentinel 支持 SCAN/HSCAN/SSCAN/ZSCAN；Cluster 仅单 Key 后三者
 未验证分页中途拓扑切换、JDK 11/17/25、其他 OS 或性能/长稳。公共 API 为增量方法/类，
 Java 8 编译与源码兼容复核通过，未运行 japicmp。C5 暂不关闭；除剩余 binary/sync 统一外，
 还需定位上述间歇性测试错误并恢复 Java 8 全量验收证据。
+
+### Java 8 Binary RESP 后续诊断（2026-09-28）
+
+基线 `ee7e81a`；补充三段任意分片/输入数组复用/后续回复的协议测试，以及有上限的
+二进制 socket 重复诊断与失败端点状态。没有修改生产 decoder，也未放宽断言或超时。
+JDK 8 定向 21 tests 通过，包含 200 轮、400 条独立连接，未复现 H。
+新全模块矩阵 JDK 8u202/21.0.7 各 142 tests、0 failures/errors/skipped，
+报告 `$TMPDIR/boba-straw-compatibility-2lkDyg`。四服务端及拓扑范围沿用上一批。
+当前全量通过记录已恢复，但原错误根因仍未知、问题仍待追踪，不能称为已修复。
+原失败证据继续保留，详见 [Binary RESP 诊断](../testing/binary-resp-diagnostics.md)。

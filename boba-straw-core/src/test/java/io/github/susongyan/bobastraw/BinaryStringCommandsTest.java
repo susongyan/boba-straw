@@ -48,6 +48,16 @@ class BinaryStringCommandsTest {
 
     @Test
     void preservesMissingEmptyDuplicateAndNonUtf8ResultsInBothProtocols() throws Exception {
+        int repetitions = Integer.getInteger("boba.straw.binaryDiagnosticRepetitions", 1);
+        if (repetitions < 1 || repetitions > 1000) {
+            throw new IllegalArgumentException("Binary diagnostic repetitions must be between 1 and 1000");
+        }
+        for (int iteration = 0; iteration < repetitions; iteration++) {
+            verifyBinaryReplies();
+        }
+    }
+
+    private void verifyBinaryReplies() throws Exception {
         for (String nil : new String[] {"$-1\r\n", "_\r\n"}) {
             try (Server server = new Server(socket -> {
                 readCommand(socket, ascii("MGET"), KEY, KEY, new byte[0], ascii("missing"));
@@ -58,7 +68,14 @@ class BinaryStringCommandsTest {
                 socket.getOutputStream().write(ascii("\r\n$0\r\n\r\n" + nil));
                 socket.getOutputStream().flush();
             }); BobaStrawClient client = client(server)) {
-                List<byte[]> values = await(client.binary().mget(KEY, KEY, new byte[0], ascii("missing")));
+                List<byte[]> values;
+                try {
+                    values = await(client.binary().mget(KEY, KEY, new byte[0], ascii("missing")));
+                } catch (Exception error) {
+                    // Test-only endpoint/lifecycle evidence, without logging application payloads.
+                    error.addSuppressed(new IllegalStateException(server.diagnosticState()));
+                    throw error;
+                }
                 assertEquals(4, values.size());
                 assertArrayEquals(VALUE, values.get(0));
                 assertArrayEquals(VALUE, values.get(1));
@@ -196,6 +213,15 @@ class BinaryStringCommandsTest {
 
         private void verify() throws Exception {
             completed.get(4, TimeUnit.SECONDS);
+        }
+
+        private String diagnosticState() {
+            Socket socket = connection;
+            return "Binary fixture listener=" + listener.getLocalSocketAddress()
+                + ", accepted=" + (socket != null)
+                + ", peer=" + (socket == null ? "none" : socket.getRemoteSocketAddress())
+                + ", scenarioCompleted=" + completed.isDone()
+                + ", scenarioFailed=" + completed.isCompletedExceptionally();
         }
 
         @Override

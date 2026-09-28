@@ -298,3 +298,11 @@ Typed 与特殊能力不互斥。新增 CMD-13/14、BSU010/011，清除 Sentinel
 Cluster 禁止没有节点绑定的数据库 SCAN，单 Key 三种扫描复用 Slot 路由。
 仅 String 异步与基础 MATCH/COUNT；不隐式遍历、不去重、不提供快照或拓扑切换连续性承诺。
 验收记录见覆盖清单。binary/sync 执行统一、binary Scan 和剩余 C5 退出审查仍需后续处理。
+
+### Java 8 间歇性 Binary RESP 诊断
+
+基线 `ee7e81a`，仅增加测试与诊断证据，没有根据一次未复现错误改动生产 decoder。
+固定二进制回复的所有三段分片边界、输入缓冲复用、后续回复匹配测试通过；
+Java 8 定向 200 轮/400 条独立连接未复现。测试附加端点与服务端状态，保留未来故障线索。
+详情及复跑入口见 [Binary RESP 诊断](../testing/binary-resp-diagnostics.md)。
+原始非法 H 的来源仍待定位，新的通过结果不能作为根因已修复的证明。
