@@ -17,6 +17,11 @@ description: Add, extend, or review Redis command implementations in the Boba St
 - 人员接入、跨 Agent 使用和恢复任务：见[使用指南](../../../docs/development/command-extension-guide.md)。
 
 先核实命令形式、Key 位置、连接状态影响、返回结构及版本，再实现。
+命令开发必须读取[三层命令模型](../../../docs/architecture/command-model.md)和
+[扩展指南](../../../docs/development/command-extension-guide.md)：高频普通命令优先 Typed API；
+Pipeline、事务、阻塞、订阅、Scan 使用特殊能力入口；低频未封装普通命令保留 Raw 出口。
+Typed 是结果类型约束，特殊能力是执行方式，两者不互斥。特殊 API 也可以返回 typed 结果；
+Scan 是游标语义，不因此要求专用连接。不要将所有特殊能力都实现为普通逐条 execute。
 普通命令复用执行内核；阻塞、事务、订阅及连接状态命令须检查专用连接前置能力，
 不能用共享 Raw API 绕过隔离。缺失且超出授权范围的前置能力需报告并请求方向。
 

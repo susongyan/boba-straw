@@ -11,15 +11,21 @@ description: Help application teams integrate Boba Straw correctly without addin
 SNAPSHOT 必须核对来源提交，无法确认时标记未核实；不要擅自升级 SDK。
 
 按需读取：
+
 - 新接入：[快速开始](../../../docs/usage/quickstart.md)、[能力表](../../../docs/usage/supported-features.md)、[生命周期](../../../docs/usage/lifecycle.md)。
 - 失败处理：[失败与重试](../../../docs/usage/failures-and-retries.md)。
 - 代码审查：[规则与行为验收](../../../docs/usage/review-checklist.md)，报告编号、位置、证据、影响、建议和验证结果。
 - 升级/分发：[版本与渠道](../../../docs/usage/distribution.md)。
 
-使用 BobaStrawClient 公开 API，长期复用 Client，遵守资源所有权。Pipeline 不是事务。
+优先使用已支持拓扑的普通 Typed API；Pipeline/事务/阻塞/订阅/Scan 使用对应特殊能力 API；
+只有未封装的普通命令才使用 Raw。Typed 类型安全与特殊执行方式可同时存在，不是互斥分类。
+Raw 不能绕过连接隔离或跨 Slot 限制。先核对能力表和实际依赖版本，不生成不存在的方法。
+批量 typed 句柄不是 Future，不可独立取消；整批完成后按原批次句柄读取结果并处理单条错误与 WATCH abort。
+Scan 按页消费，空页不代表结束；不把 COUNT 当固定页大小，不承诺无重复或一致性快照。
+长期复用 Client，遵守资源所有权。Pipeline 不是事务。
 subscribe 返回 CompletionStage<BobaStrawSubscription>；保存 handle，明确关闭路径。
 超时和取消不等于服务端撤销。背压异常也可能出现在结果交付阶段，不能仅按异常类决定重试写命令。
-未实现的 TLS/Sentinel、未验收的 Cluster/事务取消等按能力表报告，不生成不存在的接口。
+拓扑、TLS、专用能力和取消的实现/验证状态只以对应版本能力表为准，不在 Skill 维护另一份完成状态。
 不为接入引入响应式依赖；不干涉业务项目其他用途的既有依赖。
 
 修改后编译并运行已有相关测试，说明跳过/未验证内容；不能用 Skill 校验替代行为测试。

@@ -33,6 +33,12 @@ Redis、Valkey 和第三方模块支持分别声明，不能用一个服务端�
 
 ## 3. 确定 API 与前置依赖
 
+先声明 API 分类和适用拓扑：普通 Typed、特殊能力（可有 typed 结果）或普通 Raw。
+复用 CommandRegistry/TypedCommand/decoder，不复制路由和受限命令名单。
+批量句柄属于原批次，解码不触发额外请求；不能用普通 CommandExecutor 逐条发送冒充 Pipeline/事务。
+Scan 一次只返回一页：游标按不透明字符串处理，COUNT 不是条数保证，空页不等于结束，
+重复元素与并发变化不能被包装成快照/恰好一次承诺；明确 Cluster 全库扫描的节点边界。
+
 沿用相邻命令的公开接口和结果类型，检查同步、CompletionStage、String、byte[] 各自范围。
 不为了凑对称性虚构尚不存在的 facade；不覆盖的接口注明原因。
 新增重载注意 null 调用歧义，接口新增抽象方法注意第三方实现兼容，结果映射不得有损转换二进制。

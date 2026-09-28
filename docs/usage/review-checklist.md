@@ -13,6 +13,8 @@
 | BSU007 | warning | 订阅、事务 builder 或自建 executor 没有释放路径 | AI 核对应用关闭 |
 | BSU008 | error | 虚构公开 API/配置/支持范围，Skill/SDK 版本不匹配仍照搬 | 编译、版本检查与 AI |
 | BSU009 | error | 提交真实凭据或把带密码 URI 写入日志 | AI/企业既有密钥扫描 |
+| BSU010 | error | 批次句柄跨批读取、未处理 WATCH abort 或单条错误、把句柄当可独立取消的 Future | AI 核对 typed 批量语义 |
+| BSU011 | error | 空 Scan 页即停止、COUNT 当固定页大小、声称 Cluster SCAN 覆盖全库或扫描无重复 | AI 核对游标/拓扑边界 |
 
 每条发现输出：规则编号、确定违规/需人工判断/未验证、严重程度、文件及行号、代码证据、影响、
 建议、验证命令。没有证据时标记未验证，不能宣称扫描过整个项目。
@@ -31,7 +33,10 @@ RulesVerificationTest 通过正反例验证规则本身。该检查不检测反�
 | catch 超时后重试 INCR | BSU004，解释可能重复执行 |
 | 用 Pipeline 完成原子扣减 | BSU005，指出非原子且不虚构替代 API |
 | 订阅后不保存 handle | BSU007，检查 shutdown 兜底 |
-| 要求 rediss/Sentinel 生产接入 | BSU008，说明未实现 |
+| 要求 rediss/Sentinel 接入 | 分别按版本能力表核对，不把 Sentinel 普通命令与 TLS/专用组合混为一谈 |
+| 普通 GET 已有 typed 方法却默认推荐 Raw | 优先推荐 typed；合法普通 Raw 本身不判违规 |
+| Scan 返回空列表但游标非零 | BSU011，继续由调用方决定请求下一页，不声称遍历完成 |
+| 事务 typed 结果 isAborted 为 true | BSU010，不能将未执行的句柄解释为正常空值 |
 | 依赖版本未知或不同 | 报告版本未核实/不匹配，不擅自升级 |
 | 业务项目已有其他用途的 Reactor | 不要求删除无关依赖 |
 
