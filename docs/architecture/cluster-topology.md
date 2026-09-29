@@ -22,7 +22,8 @@ cluster.executeWithKeysAsync(new String[] {"{account}:name"}, "GETDEL", "{accoun
 
 上例 GETDEL 需要支持该命令的服务端；这里只展示 Raw 路由，不表示已经提供类型化或二进制接口。
 无 Key 命令选择一个可用主节点（没有 READY 节点时提交到候选主节点并保留失败），
-不是全节点广播；SCAN、KEYS、DBSIZE 等也只是单节点结果。当前只读写主节点，不读取副本。
+不是全节点广播；SCAN、KEYS、DBSIZE 等也只是单节点结果。只读写当前主节点，不读取副本；
+2026-09-29 已决定不规划读写分离或 Replica 读策略，见[架构决策](decisions.md)。
 
 ## 节点与刷新
 
@@ -98,7 +99,7 @@ mvn test -Dboba.straw.runCluster=true
 `ClusterLifecycleTest` 验证模拟网络故障、ACK 次序、取消、资源归属和坏拓扑；
 `ClusterIntegrationTest` 验证 RESP2/AUTO、真实 ASK、主动切换和主节点不可用后的自动选主。
 具体运行记录在 [核心收尾计划](../implementation/core-completion-plan.md)。
-未将单容器测试等同跨主机网络分区、全量重分片压力、认证轮换、Replica 读或生产长稳验收。
+未将单容器测试等同跨主机网络分区、全量重分片压力、认证轮换或生产长稳验收。
 
 ## 官方依据
 

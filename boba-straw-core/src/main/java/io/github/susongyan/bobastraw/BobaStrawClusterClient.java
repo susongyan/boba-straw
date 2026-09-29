@@ -49,6 +49,7 @@ public final class BobaStrawClusterClient implements AutoCloseable {
     private boolean refreshAgain;
     private boolean eventRefreshScheduled;
     private NioConnectionFactory.ScheduledTask refreshTask;
+    private final BobaStrawScripts scripts;
 
     private BobaStrawClusterClient(Builder builder) {
         this.ownsResources = builder.resources == null;
@@ -69,6 +70,23 @@ public final class BobaStrawClusterClient implements AutoCloseable {
         this.password = builder.password;
         this.clientName = builder.clientName;
         this.seeds = new ArrayList<Seed>(builder.seeds);
+        this.scripts = new BobaStrawScripts(new BobaStrawScripts.Router() {
+            @Override
+            public BobaStrawScripts.Target select(byte[][] keys) {
+                Integer slot = scriptSlot(keys);
+                synchronized (lock) {
+                    ensureOpen();
+                    return (slot == null ? anyPrimary() : slots[slot.intValue()]).client.scriptTarget();
+                }
+            }
+
+            @Override
+            public BobaStrawScripts.Target redirect(
+                BobaStrawScripts.Target source, byte[][] keys, Throwable error
+            ) {
+                return redirectScript(source, scriptSlot(keys), error);
+            }
+        }, timeout, false);
         try {
             bootstrap();
             synchronized (lock) {
@@ -89,6 +107,60 @@ public final class BobaStrawClusterClient implements AutoCloseable {
         return new BobaStrawAsyncCommands(this::executeAsync);
     }
 
+    public BobaStrawScripts scripts() {
+        return scripts;
+    }
+
+    private static Integer scriptSlot(byte[][] keys) {
+        return ClusterCommandRouting.sameSlot(CommandArgs.binary(keys));
+    }
+
+    private BobaStrawScripts.Target redirectScript(
+        BobaStrawScripts.Target source, Integer slot, Throwable failure
+    ) {
+        String message = failure.getMessage() == null ? "" : failure.getMessage();
+        if (!(failure instanceof BobaStrawServerException) || message.startsWith("MOVED ")
+            || message.startsWith("ASK ") || message.startsWith("CLUSTERDOWN ")
+            || message.startsWith("READONLY ") || message.startsWith("TRYAGAIN ")) {
+            requestRefresh();
+        }
+        if (!(failure instanceof BobaStrawServerException) || slot == null
+            || (!message.startsWith("MOVED ") && !message.startsWith("ASK "))) {
+            return null;
+        }
+        String[] parts = message.split(" ");
+        if (parts.length != 3 || Integer.parseInt(parts[1]) != slot.intValue()) {
+            return null;
+        }
+        String host = source.connection.host();
+        host = host.indexOf(':') >= 0 ? "[" + host + "]" : host;
+        Seed endpoint = Builder.parseEndpoint(parts[2].startsWith(":") ? host + parts[2] : parts[2]);
+        synchronized (lock) {
+            ensureOpen();
+            if ("MOVED".equals(parts[0])) {
+                Node destination = node(endpoint);
+                Node[] replacement = slots.clone();
+                replacement[slot.intValue()] = destination;
+                slots = replacement;
+                topologyVersion++;
+                return destination.client.scriptTarget();
+            }
+            if (redirectConnections.size() >= maxRedirectConnections) {
+                throw new BobaStrawBackpressureException("Cluster ASK connection limit reached");
+            }
+            final NioConnection dedicated = connectionFactory.create(
+                endpoint.host, endpoint.port, timeout, protocol, username, password,
+                clientName, null, Duration.ZERO, respLimits, connectionLimits);
+            redirectConnections.add(dedicated);
+            dedicated.onClose(() -> {
+                synchronized (lock) {
+                    redirectConnections.remove(dedicated);
+                }
+            });
+            return new BobaStrawScripts.Target(dedicated, dedicated::isOpen, true);
+        }
+    }
+
     /** Key-bound scans only; database SCAN is rejected by this facade. */
     public BobaStrawScanCommands scan() {
         return new BobaStrawScanCommands(this::executeAsync, false);
@@ -96,6 +168,18 @@ public final class BobaStrawClusterClient implements AutoCloseable {
 
     public CompletionStage<RespValue> executeAsync(String command, String... arguments) {
         return execute(ClusterCommandRouting.slot(command, arguments), command, arguments);
+    }
+
+    /**
+     * Loads on the current primary for routingKey, without executing or broadcasting.
+     * The routing key is not sent as a SCRIPT LOAD argument. A subsequent topology change
+     * can still make EVALSHA fail with NOSCRIPT; no preload is automatically repeated.
+     */
+    public CompletionStage<String> scriptLoadForKey(String routingKey, String script) {
+        CommandArgs.text(routingKey);
+        TypedCommand<String> command = ScriptCommandFactory.load(script);
+        return BobaStrawStages.map(execute(ClusterSlot.of(routingKey), command.name(), command.arguments()),
+            command.decoder()::apply);
     }
 
     /**
@@ -625,6 +709,7 @@ public final class BobaStrawClusterClient implements AutoCloseable {
 
     @Override
     public void close() {
+        scripts.close();
         List<Node> closing;
         List<NioConnection> dedicated;
         CompletableFuture<Void> refresh;

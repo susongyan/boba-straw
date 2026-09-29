@@ -344,13 +344,33 @@ public final class BobaStrawAsyncCommands {
     }
 
     public CompletionStage<RespValue> eval(String script, String[] keys, String... arguments) {
-        String[] command = new String[3 + keys.length + arguments.length];
-        command[0] = "EVAL";
-        command[1] = script;
-        command[2] = Integer.toString(keys.length);
-        System.arraycopy(keys, 0, command, 3, keys.length);
-        System.arraycopy(arguments, 0, command, 3 + keys.length, arguments.length);
-        return executor.executeAsync(command[0], Arrays.copyOfRange(command, 1, command.length));
+        return eval(script, ScriptOutput.raw(), keys, arguments);
+    }
+
+    /** Executes once; all accessed keys must be declared, and Cluster keys must share a slot. */
+    public <T> CompletionStage<T> eval(String script, ScriptOutput<T> output,
+                                      String[] keys, String... arguments) {
+        return executor.execute(ScriptCommandFactory.text(false, script, output, keys, arguments));
+    }
+
+    /** Executes once by digest. NOSCRIPT remains an error; no automatic loading or retry. */
+    public CompletionStage<RespValue> evalSha(String sha1, String[] keys, String... arguments) {
+        return evalSha(sha1, ScriptOutput.raw(), keys, arguments);
+    }
+
+    /** Executes once by digest and decodes the reply using the explicit output contract. */
+    public <T> CompletionStage<T> evalSha(String sha1, ScriptOutput<T> output,
+                                         String[] keys, String... arguments) {
+        return executor.execute(ScriptCommandFactory.text(true, sha1, output, keys, arguments));
+    }
+
+    /**
+     * Loads without executing. In Cluster this selects ONE primary, not all nodes;
+     * use the Cluster client's scriptLoadForKey for key-directed preloading.
+     * A later failover or cache flush can still cause NOSCRIPT.
+     */
+    public CompletionStage<String> scriptLoad(String script) {
+        return executor.execute(ScriptCommandFactory.load(script));
     }
 
     static CompletionStage<String> string(CompletionStage<RespValue> stage) {

@@ -12,6 +12,11 @@ The decoder has one RESP value model. RESP2 is a subset; RESP3 Push, Attribute, 
 
 The client does not automatically retry commands. A timeout or disconnect after a write may mean Redis executed the command; callers must not treat it as a safe negative acknowledgement.
 
+2026-09-29 Lua L2 实现的显式例外：使用注册脚本执行器时，首次 EVAL，
+有目标节点缓存提示时 EVALSHA，仅明确 NOSCRIPT 可恢复一次 EVAL。直接命令仍不自动回退，
+超时/断连/其他错误不恢复；脚本不得伪造 NOSCRIPT。这不是通用网络重试策略，详见
+[Lua 设计与流程图](lua-scripting.md)。
+
 ## Connection model
 
 普通命令默认使用每个 Redis 节点一个共享的 NIO 多路复用连接，不要求业务配置连接池大小。
@@ -42,6 +47,17 @@ exponential backoff 重建；BACKING_OFF 中的新调用明确以“未发送”
 兼容入口。
 
 ## Current delivery boundary
+
+### Primary-only routing
+
+2026-09-29：不规划客户端读写分离或 Replica 读策略。Cluster/Sentinel 普通读写均选择
+当前主节点，不提供副本读取偏好或主节点不可用时降级读副本的策略。这样避免引入副本读取的
+额外陈旧数据语义和配置复杂度，但不承诺消除故障切换时的数据丢失或未知执行结果。
+该决定不取消服务端复制和故障切换支持：副本晋升为主节点后仍按新拓扑访问。
+Standalone 使用调用方配置的端点，不因该决定自动发现或校验其主从角色。
+读写分离不作为 v1 或当前发布的验收前提；如未来需求改变，需重新作架构决策。
+
+### Implemented scope
 
 Standalone 已达到基础验收。Cluster 普通主节点命令具有节点退避重连、周期/事件拓扑发现、
 非 seed 旧节点摘除、已知多 Key 同 Slot 校验和单次 MOVED/ASK；ASK 使用单次专用连接，

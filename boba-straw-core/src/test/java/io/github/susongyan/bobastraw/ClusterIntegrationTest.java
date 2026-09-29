@@ -16,6 +16,76 @@ import static org.junit.jupiter.api.Assertions.*;
 @EnabledIfSystemProperty(named = "boba.straw.runCluster", matches = "true")
 class ClusterIntegrationTest {
     @Test
+    void luaAskUsesDestinationCacheWithoutLoadingItImplicitly() throws Exception {
+        assertTestContainer();
+        for (ProtocolVersion protocol : new ProtocolVersion[] {ProtocolVersion.RESP2, ProtocolVersion.AUTO}) {
+            String id = UUID.randomUUID().toString();
+            String key = "boba-lua-ask:{" + id + "}:absent";
+            String script = "return KEYS[1] -- " + id;
+            int slot = ClusterSlot.of(key);
+            try (BobaStrawClusterClient client = cluster(protocol);
+                 BobaStrawClient discovery = admin(17401)) {
+                List<RespValue> topology = array(reply(discovery.executeAsync("CLUSTER", "SLOTS")));
+                int sourcePort = owner(topology, slot);
+                int targetPort = differentPrimary(topology, sourcePort);
+                try (BobaStrawClient source = admin(sourcePort); BobaStrawClient target = admin(targetPort)) {
+                    String sha = TypedTopologyTestFixture.await(client.scriptLoadForKey(key, script));
+                    assertEquals(1, array(reply(source.executeAsync("SCRIPT", "EXISTS", sha))).get(0).asLong());
+                    assertEquals(0, array(reply(target.executeAsync("SCRIPT", "EXISTS", sha))).get(0).asLong(),
+                        "Key-directed LOAD must not broadcast to another primary");
+                    String sourceId = reply(source.executeAsync("CLUSTER", "MYID")).asString();
+                    String targetId = reply(target.executeAsync("CLUSTER", "MYID")).asString();
+                    client.scripts().register("ask-script", script, ScriptOutput.string());
+                    assertEquals(key, TypedTopologyTestFixture.await(client.scripts().execute(
+                        "ask-script", ScriptOutput.string(), new String[] {key})));
+                    try {
+                        reply(target.executeAsync("CLUSTER", "SETSLOT", String.valueOf(slot), "IMPORTING", sourceId));
+                        reply(source.executeAsync("CLUSTER", "SETSLOT", String.valueOf(slot), "MIGRATING", targetId));
+                        Throwable missing = failure(client.async().evalSha(sha, new String[] {key}));
+                        assertTrue(missing instanceof BobaStrawServerException);
+                        assertTrue(missing.getMessage().startsWith("NOSCRIPT"));
+                        assertEquals(0, array(reply(target.executeAsync("SCRIPT", "EXISTS", sha))).get(0).asLong());
+                        assertEquals(key, TypedTopologyTestFixture.await(client.scripts().execute(
+                            "ask-script", ScriptOutput.string(), new String[] {key})));
+                        assertEquals(1, array(reply(target.executeAsync("SCRIPT", "EXISTS", sha))).get(0).asLong());
+                        assertEquals(key, TypedTopologyTestFixture.await(client.async().eval(
+                            script, ScriptOutput.string(), new String[] {key})));
+                        assertEquals(key, TypedTopologyTestFixture.await(client.async().evalSha(
+                            sha, ScriptOutput.string(), new String[] {key})));
+                        assertEquals(key, TypedTopologyTestFixture.await(client.scripts().execute(
+                            "ask-script", ScriptOutput.string(), new String[] {key})));
+                    } finally {
+                        try {
+                            reply(source.executeAsync("CLUSTER", "SETSLOT", String.valueOf(slot), "STABLE"));
+                        } finally {
+                            reply(target.executeAsync("CLUSTER", "SETSLOT", String.valueOf(slot), "STABLE"));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
+    void luaPreloadUsesKeyOwnerAndRejectsCrossSlot() throws Exception {
+        assertTestContainer();
+        for (ProtocolVersion protocol : new ProtocolVersion[] {ProtocolVersion.RESP2, ProtocolVersion.AUTO}) {
+            try (BobaStrawClusterClient client = cluster(protocol)) {
+                ScriptCompatibilityTest.verifyAsync(client.async(), client::scriptLoadForKey);
+                ScriptCompatibilityTest.verifyRegistered(client.scripts(), client.async());
+                assertTrue(failure(client.scripts().execute("increment", ScriptOutput.integer(),
+                    new String[] {"{a}", "{b}"}, "1")) instanceof IllegalArgumentException);
+                assertThrows(IllegalArgumentException.class,
+                    () -> client.async().eval("return 1", new String[] {"{a}", "{b}"}));
+                assertThrows(IllegalArgumentException.class, () -> client.async().evalSha(
+                    "0000000000000000000000000000000000000000", new String[] {"{a}", "{b}"}));
+                assertThrows(IllegalArgumentException.class, () -> client.scriptLoadForKey(null, "return 1"));
+                assertEquals(40, TypedTopologyTestFixture.await(client.async().scriptLoad("return 1")).length());
+            }
+        }
+    }
+
+    @Test
     void keyBoundScansFollowSlotRouting() throws Exception {
         assertTestContainer();
         for (ProtocolVersion protocol : new ProtocolVersion[] {ProtocolVersion.RESP2, ProtocolVersion.AUTO}) {
@@ -96,10 +166,16 @@ class ClusterIntegrationTest {
                 assertFalse(client.nodeMetrics().containsKey("[127.0.0.1]:" + replica));
                 try {
                     ReplicationTestFixture.writeAndAwaitReplica(writer, key, "retained", "2000");
+                    client.scripts().register("read", "return redis.call('GET', KEYS[1]) -- " + UUID.randomUUID(),
+                        ScriptOutput.string());
+                    assertEquals("retained", TypedTopologyTestFixture.await(client.scripts().execute(
+                        "read", ScriptOutput.string(), new String[] {key})));
                     reply(promoted.executeAsync("CLUSTER", "FAILOVER"));
                     awaitOwner(discovery, ClusterSlot.of(key), replica);
                     awaitClientNode(client, replica);
                     assertEquals("retained", reply(client.executeAsync("GET", key)).asString());
+                    assertEquals("retained", TypedTopologyTestFixture.await(client.scripts().execute(
+                        "read", ScriptOutput.string(), new String[] {key})));
                     assertTrue(client.topologyRefreshSuccesses() > 0);
                 } finally {
                     reply(client.executeAsync("DEL", key));
@@ -160,8 +236,9 @@ class ClusterIntegrationTest {
         return result.toCompletableFuture().get(5, TimeUnit.SECONDS);
     }
 
-    private static Throwable failure(CompletionStage<RespValue> result) throws Exception {
-        Throwable error = assertThrows(java.util.concurrent.ExecutionException.class, () -> reply(result));
+    private static Throwable failure(CompletionStage<?> result) throws Exception {
+        Throwable error = assertThrows(java.util.concurrent.ExecutionException.class,
+            () -> result.toCompletableFuture().get(5, TimeUnit.SECONDS));
         while (error instanceof java.util.concurrent.ExecutionException
             || error instanceof java.util.concurrent.CompletionException) {
             error = error.getCause();

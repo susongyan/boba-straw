@@ -306,15 +306,30 @@ public final class BobaStrawSyncCommands {
     }
 
     public RespValue eval(String script, String[] keys, String... arguments) {
-        String[] command = new String[3 + keys.length + arguments.length];
-        command[0] = "EVAL";
-        command[1] = script;
-        command[2] = Integer.toString(keys.length);
-        System.arraycopy(keys, 0, command, 3, keys.length);
-        System.arraycopy(arguments, 0, command, 3 + keys.length, arguments.length);
-        String[] tail = new String[command.length - 1];
-        System.arraycopy(command, 1, tail, 0, tail.length);
-        return typed("EVAL", value -> value, tail);
+        return eval(script, ScriptOutput.raw(), keys, arguments);
+    }
+
+    /** Executes once; decodes on the calling thread, not on a callback worker. */
+    public <T> T eval(String script, ScriptOutput<T> output, String[] keys, String... arguments) {
+        return executeScript(ScriptCommandFactory.text(false, script, output, keys, arguments));
+    }
+
+    /** NOSCRIPT is returned as a server exception, without loading or retrying. */
+    public RespValue evalSha(String sha1, String[] keys, String... arguments) {
+        return evalSha(sha1, ScriptOutput.raw(), keys, arguments);
+    }
+
+    public <T> T evalSha(String sha1, ScriptOutput<T> output, String[] keys, String... arguments) {
+        return executeScript(ScriptCommandFactory.text(true, sha1, output, keys, arguments));
+    }
+
+    /** Loads on the configured server without executing the script. */
+    public String scriptLoad(String script) {
+        return executeScript(ScriptCommandFactory.load(script));
+    }
+
+    private <T> T executeScript(TypedCommand<T> command) {
+        return command.decoder().apply(client.await(client.executeTransport(command.name(), command.arguments())));
     }
 
     private String string(String command, String... arguments) {

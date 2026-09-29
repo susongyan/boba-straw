@@ -41,6 +41,7 @@ public final class BobaStrawSentinelClient implements AutoCloseable {
     private long failures;
     private Duration retryDelay;
     private boolean closed;
+    private final BobaStrawScripts scripts;
 
     private BobaStrawSentinelClient(Builder builder) {
         ownsResources = builder.resources == null;
@@ -62,6 +63,25 @@ public final class BobaStrawSentinelClient implements AutoCloseable {
         retryDelay = reconnectInterval;
         respLimits = builder.respLimits;
         connectionLimits = builder.connectionLimits;
+        scripts = new BobaStrawScripts(new BobaStrawScripts.Router() {
+            @Override
+            public BobaStrawScripts.Target select(byte[][] keys) {
+                return scriptTarget();
+            }
+
+            @Override
+            public BobaStrawScripts.Target redirect(
+                BobaStrawScripts.Target source, byte[][] keys, Throwable failure
+            ) {
+                if (failure instanceof BobaStrawCommandTimeoutException
+                    || failure instanceof BobaStrawCommandMayHaveExecutedException
+                    || failure instanceof BobaStrawServerException
+                        && failure.getMessage().startsWith("READONLY ")) {
+                    invalidate(source.connection);
+                }
+                return null;
+            }
+        }, commandTimeout, false);
         try {
             // Internal completion: construction never waits for application callback workers.
             discover().toCompletableFuture().join();
@@ -78,6 +98,25 @@ public final class BobaStrawSentinelClient implements AutoCloseable {
     /** Typed ordinary String commands against the discovered primary; no implicit command replay. */
     public BobaStrawAsyncCommands async() {
         return new BobaStrawAsyncCommands(this::executeAsync);
+    }
+
+    public BobaStrawScripts scripts() {
+        return scripts;
+    }
+
+    private BobaStrawScripts.Target scriptTarget() {
+        synchronized (lock) {
+            ensureOpen();
+            final NioConnection selected = master;
+            if (selected == null || !selected.isOpen()) {
+                throw new BobaStrawCommandNotSentException("Sentinel primary is unavailable", null);
+            }
+            return new BobaStrawScripts.Target(selected, () -> {
+                synchronized (lock) {
+                    return !closed && master == selected && selected.isOpen();
+                }
+            }, false);
+        }
     }
 
     public BobaStrawScanCommands scan() {
@@ -379,6 +418,7 @@ public final class BobaStrawSentinelClient implements AutoCloseable {
 
     @Override
     public void close() {
+        scripts.close();
         NioConnection previous;
         Discovery active;
         synchronized (lock) {

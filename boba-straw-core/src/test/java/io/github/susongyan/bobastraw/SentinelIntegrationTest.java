@@ -16,6 +16,17 @@ import static org.junit.jupiter.api.Assertions.*;
 @EnabledIfSystemProperty(named = "boba.straw.runSentinel", matches = "true")
 class SentinelIntegrationTest {
     @Test
+    void luaCommandsUseDiscoveredPrimary() throws Exception {
+        assertTestContainer();
+        for (ProtocolVersion protocol : new ProtocolVersion[] {ProtocolVersion.RESP2, ProtocolVersion.AUTO}) {
+            try (BobaStrawSentinelClient client = builder(protocol).build()) {
+                ScriptCompatibilityTest.verifyAsync(client.async(), (key, script) -> client.async().scriptLoad(script));
+                ScriptCompatibilityTest.verifyRegistered(client.scripts(), client.async());
+            }
+        }
+    }
+
+    @Test
     void scanPagesUseDiscoveredPrimary() throws Exception {
         assertTestContainer();
         for (ProtocolVersion protocol : new ProtocolVersion[] {ProtocolVersion.RESP2, ProtocolVersion.AUTO}) {
@@ -48,13 +59,19 @@ class SentinelIntegrationTest {
                      BobaStrawClient replica = admin(replacement, "boba-test-data")) {
                     awaitReplica(replica);
                     ReplicationTestFixture.writeAndAwaitReplica(writer, key, "tea", "5000");
+                    client.scripts().register("read", "return redis.call('GET', KEYS[1]) -- " + UUID.randomUUID(),
+                        ScriptOutput.string());
                     try {
                         assertEquals("tea", TypedTopologyTestFixture.await(client.async().get(key)));
+                        assertEquals("tea", TypedTopologyTestFixture.await(client.scripts().execute(
+                            "read", ScriptOutput.string(), new String[] {key})));
                         assertEquals("OK", reply(sentinel.executeAsync("SENTINEL", "FAILOVER", "tea")).asString());
                         awaitMaster(client, sentinel, replacement);
                         assertEquals("tea", TypedTopologyTestFixture.await(client.async().get(key)));
                         assertEquals("OK", TypedTopologyTestFixture.await(client.async().set(key, "new-primary")));
                         assertEquals("new-primary", TypedTopologyTestFixture.await(client.async().get(key)));
+                        assertEquals("new-primary", TypedTopologyTestFixture.await(client.scripts().execute(
+                            "read", ScriptOutput.string(), new String[] {key})));
                     } finally {
                         // A real switch disconnects old normal clients. Resolve again for cleanup.
                         awaitMaster(client, sentinel, masterPort(sentinel));

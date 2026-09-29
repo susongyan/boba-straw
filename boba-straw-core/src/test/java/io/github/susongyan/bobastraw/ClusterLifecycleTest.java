@@ -25,6 +25,52 @@ import static org.junit.jupiter.api.Assertions.*;
 @Tag("fault-injection")
 class ClusterLifecycleTest {
     @Test
+    void registeredScriptsReevaluateHintsAfterMoved() throws Exception {
+        try (Peer source = new Peer(); Peer destination = new Peer();
+             BobaStrawClusterClient client = builder(source).build()) {
+            String key = "script-moved";
+            source.redirect = "MOVED " + ClusterSlot.of(key) + " 127.0.0.1:" + destination.port();
+            source.slots = Peer.slots(destination.port());
+            client.scripts().register("read", "return 'tea'", ScriptOutput.string());
+            for (int index = 0; index < 2; index++) {
+                assertEquals("tea", client.scripts().execute("read", ScriptOutput.string(), new String[] {key})
+                    .toCompletableFuture().get(2, TimeUnit.SECONDS));
+            }
+            assertEquals(1, source.appCommands.get());
+            assertEquals(2, destination.appCommands.get());
+            List<String> scriptCommands = new java.util.ArrayList<String>();
+            for (Session session : destination.sessions) {
+                for (String command : session.commands) {
+                    if (command.startsWith("EVAL")) {
+                        scriptCommands.add(command);
+                    }
+                }
+            }
+            assertEquals(Arrays.asList("EVAL", "EVALSHA"), scriptCommands);
+            destination.redirect = "MOVED " + ClusterSlot.of(key) + " 127.0.0.1:" + source.port();
+            assertTrue(failure(client.scripts().execute("read", ScriptOutput.string(), new String[] {key})
+                .toCompletableFuture()).getMessage().startsWith("MOVED "));
+        }
+    }
+
+    @Test
+    void cancellingRegisteredScriptDuringAskingClosesItsDedicatedSocket() throws Exception {
+        try (Peer source = new Peer(); Peer destination = new Peer();
+             BobaStrawClusterClient client = builder(source).build()) {
+            String key = "script-ask";
+            source.redirect = "ASK " + ClusterSlot.of(key) + " 127.0.0.1:" + destination.port();
+            destination.holdAsking = true;
+            client.scripts().register("read", "return 'tea'", ScriptOutput.string());
+            CompletableFuture<String> result = client.scripts().execute("read", ScriptOutput.string(),
+                new String[] {key}).toCompletableFuture();
+            assertTrue(destination.askReceived.await(2, TimeUnit.SECONDS));
+            assertTrue(result.cancel(false));
+            assertTrue(destination.sessions.get(0).closed.await(2, TimeUnit.SECONDS));
+            assertEquals(0, destination.appCommands.get());
+        }
+    }
+
+    @Test
     void keyMetadataRejectsCrossSlotAndStatefulCommandsBeforeSending() throws Exception {
         try (Peer peer = new Peer(); BobaStrawClusterClient client = builder(peer).build()) {
             assertThrows(IllegalArgumentException.class, () -> client.executeAsync("MGET", "a", "b"));

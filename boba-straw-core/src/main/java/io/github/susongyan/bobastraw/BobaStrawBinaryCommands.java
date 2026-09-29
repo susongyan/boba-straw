@@ -1,5 +1,6 @@
 package io.github.susongyan.bobastraw;
 
+import io.github.susongyan.bobastraw.protocol.RespValue;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.concurrent.CompletionStage;
@@ -18,6 +19,32 @@ public final class BobaStrawBinaryCommands {
 
     static BobaStrawBinaryCommands withExecutor(BinaryCommandExecutor executor) {
         return new BobaStrawBinaryCommands(executor);
+    }
+
+    /** Binary-safe EVAL; accessed keys must be explicitly declared. */
+    public CompletionStage<RespValue> eval(byte[] script, byte[][] keys, byte[]... arguments) {
+        return eval(script, ScriptOutput.raw(), keys, arguments);
+    }
+
+    public <T> CompletionStage<T> eval(byte[] script, ScriptOutput<T> output,
+                                      byte[][] keys, byte[]... arguments) {
+        return executor.execute(ScriptCommandFactory.binary(false, script, output, keys, arguments));
+    }
+
+    /** Executes once by ASCII digest; NOSCRIPT does not cause loading or retry. */
+    public CompletionStage<RespValue> evalSha(String sha1, byte[][] keys, byte[]... arguments) {
+        return evalSha(sha1, ScriptOutput.raw(), keys, arguments);
+    }
+
+    public <T> CompletionStage<T> evalSha(String sha1, ScriptOutput<T> output,
+                                         byte[][] keys, byte[]... arguments) {
+        return executor.execute(ScriptCommandFactory.binary(true,
+            ascii(ScriptCommandFactory.sha(sha1)), output, keys, arguments));
+    }
+
+    /** Loads the exact script bytes without executing them; returns its ASCII SHA1 digest. */
+    public CompletionStage<String> scriptLoad(byte[] script) {
+        return executor.execute(ScriptCommandFactory.load(script));
     }
 
     public CompletionStage<byte[]> get(byte[] key) {

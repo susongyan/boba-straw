@@ -291,6 +291,11 @@ public final class NioConnection implements AutoCloseable {
         return executeExternal(command.buffer());
     }
 
+    /** Internal composite-operation path: all child requests share a monotonic deadline. */
+    public CompletionStage<RespValue> executeEncodedCommand(EncodedCommand command, long deadlineNanos) {
+        return executeExternal(command.buffer(), Long.valueOf(deadlineNanos));
+    }
+
     /**
      * Executes an application command and completes on the EventLoop after Redis replies.
      *
@@ -382,6 +387,14 @@ public final class NioConnection implements AutoCloseable {
     }
 
     private CompletionStage<RespValue> executeExternal(ByteBuffer encoded) {
+        return executeExternal(encoded, null);
+    }
+
+    private CompletionStage<RespValue> executeExternal(ByteBuffer encoded, Long deadlineNanos) {
+        if (deadlineNanos != null && deadlineNanos.longValue() - System.nanoTime() <= 0L) {
+            return failedStage(new BobaStrawCommandTimeoutException(
+                "Composite command timed out before submission", null, false));
+        }
         ConnectionCapacity.Reservation capacityReservation = reserveCapacity(encoded.remaining());
         if (capacityReservation == null) {
             return connectionBackpressure("Redis command was not sent");
@@ -393,7 +406,7 @@ public final class NioConnection implements AutoCloseable {
                 "Boba Straw callback capacity is exhausted; Redis command was not sent"
             ));
         }
-        return exposeToCaller(enqueueExternal(encoded, capacityReservation, null), reservation);
+        return exposeToCaller(enqueueExternal(encoded, capacityReservation, null, deadlineNanos), reservation);
     }
 
     private CompletionStage<RespValue> executeTransportExternal(byte[] encoded) {
@@ -849,7 +862,17 @@ public final class NioConnection implements AutoCloseable {
         ConnectionCapacity.Reservation capacityReservation,
         Runnable pushCompletionBarrier
     ) {
+        return enqueueExternal(encoded, capacityReservation, pushCompletionBarrier, null);
+    }
+
+    private Request enqueueExternal(
+        ByteBuffer encoded,
+        ConnectionCapacity.Reservation capacityReservation,
+        Runnable pushCompletionBarrier,
+        Long deadlineNanos
+    ) {
         final Request request = newRequest(encoded, capacityReservation);
+        request.compositeDeadlineNanos = deadlineNanos;
         request.pushCompletionBarrier = pushCompletionBarrier;
         submit(new ConnectionTask() {
             @Override
@@ -1018,6 +1041,9 @@ public final class NioConnection implements AutoCloseable {
         long timeoutNanos = timeout.toNanos();
         long elapsedNanos = System.nanoTime() - request.createdAtNanos;
         long delayNanos = elapsedNanos >= timeoutNanos ? 0L : timeoutNanos - elapsedNanos;
+        if (request.compositeDeadlineNanos != null) {
+            delayNanos = Math.max(0L, request.compositeDeadlineNanos.longValue() - System.nanoTime());
+        }
         request.deadline = eventLoop.schedule(new Runnable() {
             @Override
             public void run() {
@@ -1698,6 +1724,7 @@ public final class NioConnection implements AutoCloseable {
         private RequestState state = RequestState.QUEUED;
         private volatile boolean cancellationRequested;
         private volatile NioEventLoop.ScheduledTask deadline;
+        private Long compositeDeadlineNanos;
         private boolean bytesWritten;
         private boolean writeMayHaveReachedServer;
         private Runnable pushCompletionBarrier;

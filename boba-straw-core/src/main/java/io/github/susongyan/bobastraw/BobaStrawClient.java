@@ -59,6 +59,7 @@ public final class BobaStrawClient implements AutoCloseable {
     private final Duration transactionAcquireTimeout;
     private final Duration transactionIdleTimeout;
     private TransactionConnectionPool transactionPool;
+    private final BobaStrawScripts scripts;
 
     private BobaStrawClient(Builder builder) {
         this.ownsResources = builder.resources == null;
@@ -87,6 +88,7 @@ public final class BobaStrawClient implements AutoCloseable {
         this.transactionIdleTimeout = builder.transactionIdleTimeout;
         this.sync = new BobaStrawSyncCommands(this);
         this.async = new BobaStrawAsyncCommands(this);
+        this.scripts = new BobaStrawScripts(keys -> scriptTarget(), commandTimeout, true);
     }
 
     public static Builder builder() {
@@ -99,6 +101,16 @@ public final class BobaStrawClient implements AutoCloseable {
 
     public BobaStrawAsyncCommands async() {
         return async;
+    }
+
+    public BobaStrawScripts scripts() {
+        return scripts;
+    }
+
+    BobaStrawScripts.Target scriptTarget() {
+        final NioConnection selected = sharedConnection();
+        return new BobaStrawScripts.Target(selected,
+            () -> !closed && connection == selected && selected.isOpen(), false);
     }
 
     public BobaStrawScanCommands scan() {
@@ -476,6 +488,7 @@ public final class BobaStrawClient implements AutoCloseable {
     @Override
     public void close() {
         closed = true;
+        scripts.close();
         synchronized (this) {
             reconnectGeneration++;
             reconnectScheduled = false;

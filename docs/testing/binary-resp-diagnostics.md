@@ -69,6 +69,24 @@ JDK 8u202 定向测试 25 项通过；原 socket 场景运行 1,000 轮、2,000 
 
 ## 保留的待办
 
+### 2026-09-29 新增回归线索
+
+Lua L1（`8c1e707` + 工作树）根目录 full 验证中，JDK 8u202 再次出现 H，
+但位于 `SentinelLifecycleTest.periodicDiscoveryChangesPrimaryWithoutBusinessTraffic` 第 148 行的 bootstrap。
+这仍是本机 Java Peer 模拟测试，不是 Colima Redis；失败链为 Sentinel bootstrap → discovery →
+可能已执行 → RespCodec.decodeStep 的 Unsupported RESP marker: H。
+证据 `$TMPDIR/boba-straw-compatibility-pJst4q/run-1/maven.log` 和该目录的 surefire-reports，
+163 tests / 1 error；最终 core/src 与该轮源码快照一致。
+
+原 BinaryFailureEvidence 仅安装于 BinaryStringCommandsTest，因此本次 Sentinel 异常
+没有收发字节快照。不能据此断言原 Binary 测试正文生成有误，也不能把两个测试出现同一标记
+直接认定为同一根因；下一步需将有限取证扩展到 Sentinel 模拟发现链路。
+Lua L1 不改 RespCodec、NioConnection 或 Sentinel 发现内核，此事实不是排除其他客户端缺陷的证明。
+
+同批首轮 JDK 8 在事务超时测试等待 3 秒仍未完成（1 failure），JDK 21 全 163 tests 通过；
+首轮证据 `$TMPDIR/boba-straw-compatibility-yZ8dOn`。事务超时未定位，不能直接归因于主机负载，
+也不能将第二轮事务测试通过作为修复。两轮新增 Lua 专项及真实拓扑 Lua 用例均通过。
+
 再次发生时先检查新增端点、服务端状态和有限字节快照，并保留异常与原始测试报告。
 如需收包，只针对该合成测试端口做有限采集，不能采集其他应用/生产 Redis 流量。
 获得非法字节来自 wire 或 parser 的证据后，再分别定位网络路径或构造确定性协议回归。

@@ -94,6 +94,13 @@ class CommandModelTest {
             }
             assertThrows(IllegalArgumentException.class, () -> client.executeBatch(Arrays.asList(
                 new String[] {"SET", "never-sent", "value"}, new String[] {"MULTI"})));
+            assertThrows(IllegalArgumentException.class, () -> client.executeAsync("SCRIPT", "DEBUG", "YES"));
+            assertThrows(IllegalArgumentException.class,
+                () -> client.executeBinaryAsync(ascii("SCRIPT"), ascii("DEBUG"), ascii("YES")));
+            assertThrows(IllegalArgumentException.class, () -> client.executeTransport("SCRIPT", "DEBUG", "YES"));
+            assertThrows(IllegalArgumentException.class, () -> client.pipeline().command("SCRIPT", "DEBUG", "YES"));
+            assertThrows(IllegalArgumentException.class,
+                () -> new BobaStrawTransaction(null, null).command("SCRIPT", "DEBUG", "YES"));
             CompletionStage<RespValue> ping = client.executeAsync("PING");
             server.setSoTimeout(3000);
             try (Socket socket = server.accept()) {

@@ -12,7 +12,7 @@ final class ClusterCommandRouting {
     static Integer slot(String command, String[] arguments) {
         CommandArgs args = CommandArgs.text(arguments);
         CommandRegistry.requireOrdinary(command, args);
-        CommandSpec spec = CommandRegistry.lookup(command);
+        CommandSpec spec = CommandRegistry.resolve(command, args);
         if (spec != null) {
             return spec.slot(args);
         }
@@ -41,7 +41,10 @@ final class ClusterCommandRouting {
     }
 
     static Integer sameSlot(String[] keys) {
-        CommandArgs args = CommandArgs.text(keys);
+        return sameSlot(CommandArgs.text(keys));
+    }
+
+    static Integer sameSlot(CommandArgs args) {
         if (args.size() == 0) {
             return null;
         }

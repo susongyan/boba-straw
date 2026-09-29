@@ -2,12 +2,48 @@
 
 本文档记录已实现功能、验证结果和后续工作，是研发与 AI 协作时的进度基线。
 
+更新时间：2026-09-29；最新功能与诊断验收基线为 `8c1e707`。
+
 2026-09-22 起的执行顺序及 TLS 后置决定见[核心收尾计划](core-completion-plan.md)。
 
 状态：
+
 - [x] 已实现并通过验收
 - [~] 已有实现，但未达到生产验收
 - [ ] 尚未实现
+
+## 当前阶段与剩余工作
+
+以下为当前状态；后文网络阶段记录保留当时的版本和测试结果，不代表后续改动自动通过验收。
+
+| 阶段 | 当前状态 | 剩余范围 |
+| --- | --- | --- |
+| C1 专用连接 | 限定 Standalone 事务、BLPOP/BRPOP 范围已验收 | 更多阻塞命令及拓扑组合不包含在完成声明内 |
+| C2 / C3 Cluster / Sentinel | 限定普通命令发现、路由、重连与切换已验收 | 专用能力组合见 C6；跨主机分区及生产长稳未覆盖 |
+| C4 兼容矩阵 | 历史本机 JDK 8/11/17/21 通过；最新 C5 全量回归为 8/21 | JDK 25、其他 OS，以及最新版本的扩展矩阵 |
+| C5 高频命令与三层 API | 冻结功能已实现并完成限定环境回归；收尾未关闭 | 模拟测试偶发 H 根因、低负载正式性能复测 |
+| C6 拓扑组合 | 待实施 | Cluster/Sentinel binary、sync、Pipeline、事务、Pub/Sub、阻塞命令组合 |
+| C7 TLS | 未实现，后置 | SSLEngine、证书与主机名校验、关闭和重连验收 |
+| C8 Starter 与发布 | 基础自动配置已有，生产验收未完成 | 多客户端、拓扑/TLS 配置、Health/Micrometer、质量门禁、许可证及发布 |
+
+### C5 两项收尾
+
+- [~] 历史 `Unsupported RESP marker: H`：发生于本机 Java 模拟服务器测试，
+  不是已观测到的真实 Redis 返回异常；测试端与客户端两侧根因均未排除。
+  已补有限字节取证和主动注入 H 的取证验证，1,000 轮 / 2,000 连接未复现，不能标记修复。
+  2026-09-29 Java 8 full 回归在另一个 Sentinel 模拟测试再次出现 H，尚无该链路的字节快照；
+  不能再仅归因于原 Binary 测试夹具，详情保留在协议诊断记录。
+- [ ] C5 不可变 binary 帧优化的低负载正式 Redis/Valkey A/B/B/A：已有高负载分配量诊断，
+  但不能代替吞吐/延迟验收。最近预检 load/CPU 为 1.770，高于 1.50，正式测试未启动。
+  这不撤销历史网络模型阶段六的验收，也不沿用其结果替代本次性能测试。
+
+此前 C5 full 矩阵：JDK 8u202 / 21.0.7 各 149 tests、零失败/跳过；最终诊断断言定向回归
+各 25 tests 通过。详情见 [C5 收尾审查](c5-exit-review.md) 和
+[Binary RESP 诊断](../testing/binary-resp-diagnostics.md)。
+
+最新 Lua L1 回归：JDK 21 全 163 tests 通过；Java 8 两轮各 163 tests，分别有一项事务等待超时
+和一项 Sentinel 模拟 H 异常。新增 Lua 用例通过，但全量 Java 8 门禁未通过；
+证据与源码范围见 [Lua 测试记录](../testing/lua-scripting-validation.md)。
 
 ## 已实现功能与验收结果
 
@@ -160,7 +196,7 @@ Sentinel、TLS、Cluster 生产化等仍按本文件对应功能条目跟踪。
 - [x] Redis 5 不支持 HELLO 时回退 RESP2
 - [x] 显式 RESP2 跳过 HELLO
 - [x] 用户名、密码和 CLIENT SETNAME 握手入口
-- [x] NIO Selector/SocketChannel 单连接事件循环
+- [x] NIO Selector/SocketChannel；共享 EventLoop 管理多条连接，每条连接由一个 EventLoop 串行处理
 - [x] 命令超时和连接异常
 
 验收结果：本地假 Redis 协商测试和 Redis 5/6.2/7、Valkey 矩阵测试通过。
@@ -179,6 +215,16 @@ Sentinel、TLS、Cluster 生产化等仍按本文件对应功能条目跟踪。
 - [x] Lua EVAL 基础入口
 - [x] Pipeline 有序 API
 - [x] MULTI/EXEC 与本地 discard 专用连接 helper，支持 AutoCloseable
+
+- [x] C5 高频 String/Key/TTL/Counter/Bit、Hash/List/Set/ZSet：Standalone String sync/async 与 binary async
+- [x] CommandSpec/Args/Registry/Decoder/TypedCommand：元数据路由、普通入口策略和 typed 执行
+- [x] Cluster/Sentinel 普通 String async typed 与 Raw 入口
+- [x] Standalone String Pipeline/事务 typed 句柄与结果；保留 Raw 批量入口
+- [x] String 异步 Scan 页模型、MATCH/COUNT：Standalone/Sentinel 四种，Cluster 单 Key 三种
+
+普通 `sync()/async()/binary()` 不需要显式 `typed()`；`typed()` 用于批量构建。
+上述为冻结高频范围，非全命令/全选项；binary Scan/batch 和完整 Stream/Geo/HLL 不属于 C5 完成前提。
+方法清单、返回语义和验证依据见[命令覆盖](command-coverage.md)及[版本能力表](../usage/supported-features.md)。
 
 基础命令、Pipeline、事务 helper、Lua 已有 Redis/Valkey 兼容测试。事务与阻塞连接新增
 DedicatedConnectionLifecycleTest / DedicatedConnectionCompatibilityTest，范围与环境见核心收尾计划。
@@ -207,7 +253,7 @@ DedicatedConnectionLifecycleTest / DedicatedConnectionCompatibilityTest，范围
 - [x] ASK/ASKING 一次专用连接重定向、取消与容量限制
 - [x] 已知命令提取 Key/跨 Slot 拒绝，未知普通命令显式 Key 入口
 
-尚未达到完整生产验收：Replica 读策略、Cluster Pipeline/事务/PubSub/阻塞语义、跨主机分区和
+尚未达到完整生产验收：Cluster Pipeline/事务/PubSub/阻塞语义、跨主机分区和
 长稳压力。普通命令每节点复用连接，不要求共享连接池；专用组合留待 C6。
 设计与测试入口见 [Cluster 拓扑](../architecture/cluster-topology.md)，实际记录见
 [核心收尾计划](core-completion-plan.md)。
@@ -221,10 +267,10 @@ DedicatedConnectionLifecycleTest / DedicatedConnectionCompatibilityTest，范围
 
 尚未达到生产验收：多客户端、Sentinel/Cluster/TLS 配置、Health、Metrics、生命周期和配置校验。
 
-## 尚未实现
+## 专用能力与连接管理（已实现的限定范围）
 
-- [~] Pub/Sub 专用连接、订阅管理、RESP2 消息和 RESP3 Push 分发
-- [~] 真正批量 Pipeline 编码和批量 Socket 写入
+- [x] Standalone Pub/Sub 专用连接、订阅确认、RESP2 消息和 RESP3 Push 分发、退订释放
+- [x] Standalone 真正批量 Pipeline 编码和批量 Socket 写入
 - [x] 事务专用连接、WATCH/UNWATCH、成功归还及取消/异常销毁
 - [x] TransactionConnectionPool（按需创建、上限、锁外等待、关闭唤醒及空闲回收）
 - [x] 事务连接获取等待超时
@@ -235,17 +281,30 @@ DedicatedConnectionLifecycleTest / DedicatedConnectionCompatibilityTest，范围
 - [x] Pipeline 与命令超时到物理请求的取消传播和响应排空
 - [x] 未发送/可能已执行请求的失败分类
 - [x] Standalone 有界退避重连、连接状态与指标管理
-- [~] byte[] 基础 RESP 编码和 Raw API
-- [ ] String/ByteArray Codec 及自定义 Codec SPI
-- [ ] Stream、Bitmap、HyperLogLog、EVALSHA、Server/ACL 命令
-- [ ] JDK SSLEngine TLS
 - [x] Sentinel 普通主节点命令的发现和切换感知；专用连接组合留待 C6
-- [ ] Cluster 完整拓扑、故障切换和多 Key 校验
-- [ ] Spring Boot Health、Micrometer、Actuator、多客户端
 - [x] 确定性网络故障注入测试及独立执行入口
 - [x] 网络模型阶段六并发与 JMH 基线（Valkey 观测及 instrumentation A/B 已完成；非完整发布矩阵）
+
+上述完成状态不包含 Cluster/Sentinel 专用连接组合；测试范围见核心收尾计划和版本能力表。
+
+## 未完成及后续按需扩展
+
+- [ ] C6：Cluster/Sentinel binary 与同步 facade；Pipeline/事务/PubSub/阻塞拓扑组合
+- [ ] 跨主机分区、生产长稳及扩展 JDK/OS 发布矩阵
+- [ ] C7：JDK SSLEngine TLS
+- [ ] C8：Spring Boot Health、Micrometer、Actuator、多客户端、拓扑/TLS 配置及版本矩阵
+- [ ] 自定义 Codec SPI（已有 String 与 byte[] 高频接口，不等于可插拔序列化 SPI）
+- [ ] binary Scan/batch、更多阻塞命令及选项；按实际需求扩展，不作为 C5 冻结范围缺口
+- [~] 常用 Lua 工作包：L1 直接命令与 L2 注册执行器、连接代次提示及有界 NOSCRIPT 恢复已补代码；L3 批量接口待实施。阶段状态见[实施进度](lua-scripting-progress.md)，L2 验证与历史 Java 8 回归待办见[测试记录](../testing/lua-scripting-validation.md)
+- [ ] Stream、Geo、HyperLogLog、更多 Server/ACL typed API：按需排期，不追求全命令
 - [ ] Checkstyle、SpotBugs、ArchUnit、JaCoCo、Revapi/japicmp、Enforcer 门禁
 - [ ] LICENSE、NOTICE、Maven Central 发布元数据
+
+Bitmap 的 GETBIT/SETBIT/BITCOUNT 高频接口已经实现，不再笼统列为未实现。
+2026-09-29 范围决定：不规划客户端读写分离或 Replica 读策略，不列为待办或发布验收缺口。
+Cluster/Sentinel 普通读写均路由到当前主节点；副本晋升后的新主节点仍可正常被发现和使用。
+Cluster 的普通 Slot 路由、MOVED/ASK、节点重连及已知多 Key 同 Slot 校验已经实现，
+不再与未完成的拓扑专用能力合并为“Cluster 未实现”。
 
 ## 每项功能的完成定义
 
@@ -258,7 +317,7 @@ DedicatedConnectionLifecycleTest / DedicatedConnectionCompatibilityTest，范围
 5. 明确失败、重试和资源生命周期语义。
 6. 不引入禁止的响应式或网络运行时依赖。
 7. README 和架构文档已同步。
-8. mvn test 和 CI 门禁通过。
+8. mvn test 和适用的现有 CI 检查通过；尚未落地的发布门禁单独跟踪，不能宣称已通过。
 
 ## 测试命令
 
@@ -266,4 +325,9 @@ DedicatedConnectionLifecycleTest / DedicatedConnectionCompatibilityTest，范围
 
 兼容性测试：mvn -Dboba.straw.runCompatibility=true test
 
-Cluster/Sentinel/TLS 测试完成后，应分别加入独立 profile，默认测试不得依赖本地容器。
+Cluster：`mvn -Dboba.straw.runCluster=true test`。
+
+Sentinel：`mvn -Dboba.straw.runSentinel=true test`。
+
+隔离全模块矩阵：`sh scripts/run-compatibility-matrix.sh full /absolute/jdk8/home /absolute/jdk21/home`。
+full 需要预先启动对应本地容器；默认测试不依赖容器，TLS 测试入口待 C7 实现。

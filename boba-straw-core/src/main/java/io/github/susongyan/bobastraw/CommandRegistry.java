@@ -7,6 +7,10 @@ import java.util.Map;
 /** One catalog consumed by ordinary entry points, transactions and Cluster routing. */
 final class CommandRegistry {
     private static final Map<String, CommandSpec> SPECS;
+    private static final CommandSpec SCRIPT_LOAD = new CommandSpec("SCRIPT LOAD", CommandSpec.Keys.NONE,
+        CommandSpec.Connection.ORDINARY, CommandSpec.Access.UNKNOWN, "2.6.0");
+    private static final CommandSpec SCRIPT_DEBUG = new CommandSpec("SCRIPT DEBUG", CommandSpec.Keys.UNKNOWN,
+        CommandSpec.Connection.STATEFUL, CommandSpec.Access.UNKNOWN, "3.2.0");
 
     static {
         Map<String, CommandSpec> specs = new LinkedHashMap<String, CommandSpec>();
@@ -26,6 +30,7 @@ final class CommandRegistry {
         register(specs, CommandSpec.Keys.PAIRS, CommandSpec.Connection.ORDINARY, "MSET MSETNX");
         register(specs, CommandSpec.Keys.FIRST_TWO, CommandSpec.Connection.ORDINARY, "RENAME RENAMENX RPOPLPUSH SMOVE");
         register(specs, CommandSpec.Keys.SCRIPT, CommandSpec.Connection.ORDINARY, "EVAL EVALSHA");
+        describe(specs, CommandSpec.Access.UNKNOWN, "2.6.0", "EVAL EVALSHA");
         register(specs, CommandSpec.Keys.UNKNOWN, CommandSpec.Connection.STATEFUL,
             "MULTI EXEC DISCARD WATCH UNWATCH SELECT AUTH HELLO CLIENT QUIT RESET READONLY READWRITE "
             + "ASKING MONITOR SYNC PSYNC");
@@ -65,11 +70,28 @@ final class CommandRegistry {
         return SPECS.values();
     }
 
+    /** Resolves only known forms; an unknown SCRIPT subcommand retains the Raw escape-hatch policy. */
+    static CommandSpec resolve(String command, CommandArgs args) {
+        if ("SCRIPT".equals(CommandArgs.commandName(command)) && args.size() > 0) {
+            String subcommand = CommandArgs.commandName(args.control(0));
+            if ("LOAD".equals(subcommand)) {
+                if (args.size() != 2) {
+                    throw new IllegalArgumentException("SCRIPT LOAD requires exactly one script");
+                }
+                return SCRIPT_LOAD;
+            }
+            if ("DEBUG".equals(subcommand)) {
+                return SCRIPT_DEBUG;
+            }
+        }
+        return lookup(command);
+    }
+
     static void requireOrdinary(String command, CommandArgs args) {
         if (args == null) {
             throw new IllegalArgumentException("Arguments are required");
         }
-        CommandSpec spec = lookup(command);
+        CommandSpec spec = resolve(command, args);
         if (spec != null && spec.connection != CommandSpec.Connection.ORDINARY) {
             throw new IllegalArgumentException("Command requires a dedicated API: " + command);
         }
