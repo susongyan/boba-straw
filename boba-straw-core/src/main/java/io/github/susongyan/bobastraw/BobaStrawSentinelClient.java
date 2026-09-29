@@ -81,7 +81,7 @@ public final class BobaStrawSentinelClient implements AutoCloseable {
                 }
                 return null;
             }
-        }, commandTimeout, false);
+        }, commandTimeout, false, builder.scriptOptions);
         try {
             // Internal completion: construction never waits for application callback workers.
             discover().toCompletableFuture().join();
@@ -509,6 +509,7 @@ public final class BobaStrawSentinelClient implements AutoCloseable {
         private Duration reconnectMaxInterval = Duration.ofSeconds(5);
         private RespLimits respLimits = RespLimits.defaults();
         private BobaStrawConnectionLimits connectionLimits = BobaStrawConnectionLimits.defaults();
+        private BobaStrawScriptOptions scriptOptions = BobaStrawScriptOptions.defaults();
         private BobaStrawClientResources resources;
 
         public Builder sentinel(String host, int port) {
@@ -582,6 +583,15 @@ public final class BobaStrawSentinelClient implements AutoCloseable {
                 throw new IllegalArgumentException("respLimits must not be null");
             }
             respLimits = value;
+            return this;
+        }
+
+        /** Configures this client's local script registry, not the Redis server cache. */
+        public Builder scriptOptions(BobaStrawScriptOptions value) {
+            if (value == null) {
+                throw new IllegalArgumentException("scriptOptions must not be null");
+            }
+            this.scriptOptions = value;
             return this;
         }
 

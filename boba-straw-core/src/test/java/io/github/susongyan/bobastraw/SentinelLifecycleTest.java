@@ -22,6 +22,19 @@ import static org.junit.jupiter.api.Assertions.*;
 @Tag("fault-injection")
 class SentinelLifecycleTest {
     @Test
+    void scriptOptionsApplyToSentinelRegistry() throws Exception {
+        try (Peer sentinel = new Peer(); Peer data = new Peer()) {
+            sentinel.destination = data.port();
+            try (BobaStrawSentinelClient client = builder(sentinel)
+                .scriptOptions(BobaStrawScriptOptions.builder().maxRegisteredScripts(1).build()).build()) {
+                client.scripts().register("one", "return 1", ScriptOutput.integer());
+                assertThrows(BobaStrawBackpressureException.class,
+                    () -> client.scripts().register("two", "return 2", ScriptOutput.integer()));
+            }
+        }
+    }
+
+    @Test
     void separateAuthenticationAndRoleVerificationPrecedeCommands() throws Exception {
         try (Peer sentinel = new Peer(); Peer data = new Peer()) {
             sentinel.destination = data.port();

@@ -86,7 +86,7 @@ public final class BobaStrawClusterClient implements AutoCloseable {
             ) {
                 return redirectScript(source, scriptSlot(keys), error);
             }
-        }, timeout, false);
+        }, timeout, false, builder.scriptOptions);
         try {
             bootstrap();
             synchronized (lock) {
@@ -784,6 +784,7 @@ public final class BobaStrawClusterClient implements AutoCloseable {
         private BobaStrawClientResources resources;
         private RespLimits respLimits = RespLimits.defaults();
         private BobaStrawConnectionLimits connectionLimits = BobaStrawConnectionLimits.defaults();
+        private BobaStrawScriptOptions scriptOptions = BobaStrawScriptOptions.defaults();
 
         private Builder() {
             seeds.add(new Seed("localhost", 6379));
@@ -867,6 +868,15 @@ public final class BobaStrawClusterClient implements AutoCloseable {
         }
 
         /** Sets command admission limits for every physical Cluster node connection. */
+        /** Configures this client's local script registry, not the Redis server cache. */
+        public Builder scriptOptions(BobaStrawScriptOptions value) {
+            if (value == null) {
+                throw new IllegalArgumentException("scriptOptions must not be null");
+            }
+            this.scriptOptions = value;
+            return this;
+        }
+
         public Builder connectionLimits(BobaStrawConnectionLimits value) {
             if (value == null) {
                 throw new IllegalArgumentException("connectionLimits must not be null");

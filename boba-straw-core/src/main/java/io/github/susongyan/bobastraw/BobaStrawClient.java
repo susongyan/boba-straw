@@ -88,7 +88,7 @@ public final class BobaStrawClient implements AutoCloseable {
         this.transactionIdleTimeout = builder.transactionIdleTimeout;
         this.sync = new BobaStrawSyncCommands(this);
         this.async = new BobaStrawAsyncCommands(this);
-        this.scripts = new BobaStrawScripts(keys -> scriptTarget(), commandTimeout, true);
+        this.scripts = new BobaStrawScripts(keys -> scriptTarget(), commandTimeout, true, builder.scriptOptions);
     }
 
     public static Builder builder() {
@@ -540,6 +540,7 @@ public final class BobaStrawClient implements AutoCloseable {
         private BobaStrawClientResources resources;
         private RespLimits respLimits = RespLimits.defaults();
         private BobaStrawConnectionLimits connectionLimits = BobaStrawConnectionLimits.defaults();
+        private BobaStrawScriptOptions scriptOptions = BobaStrawScriptOptions.defaults();
 
         public Builder uri(String value) {
             URI uri = URI.create(value);
@@ -669,6 +670,15 @@ public final class BobaStrawClient implements AutoCloseable {
          * Sets per-physical-connection command admission limits for shared, transaction, and
          * Pub/Sub connections. This is independent from shared Resources callback capacity.
          */
+        /** Configures this client's local script registry, not the Redis server cache. */
+        public Builder scriptOptions(BobaStrawScriptOptions value) {
+            if (value == null) {
+                throw new IllegalArgumentException("scriptOptions must not be null");
+            }
+            this.scriptOptions = value;
+            return this;
+        }
+
         public Builder connectionLimits(BobaStrawConnectionLimits value) {
             if (value == null) {
                 throw new IllegalArgumentException("connectionLimits must not be null");

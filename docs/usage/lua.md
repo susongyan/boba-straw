@@ -25,9 +25,6 @@ CompletionStage<Long> result = client.scripts().execute(
 execute 的 output 必须与注册时结构相同，例如 list(integer) 不等于 list(string)。
 不要每次请求生成不同正文，将业务变量放入 KEYS/ARGV。
 
-当前每 Client 固定上限：1,024 个定义、16 MiB 正文总量、每名称 256 字符；超限明确失败，
-不静默淘汰定义。连接/SHA 提示最多 4,096 条，允许淘汰；逻辑在途执行最多 4,096 个，
-还受原连接与 callback 容量限制。目前不提供这些脚本上限的公开调参入口。
 关闭 Client 清理注册信息并取消在途操作；取消不保证 Redis 未执行。
 
 Standalone 二进制调用（String 或 byte[] 注册的正文均保存精确字节）：
@@ -43,6 +40,44 @@ Cluster/Sentinel 的 executeBinary 当前明确拒绝，拓扑 binary 仍留 C6�
 显式直接 SCRIPT LOAD 不更新注册执行器提示，故随后首次按名称执行仍保守使用 EVAL。
 Cluster 无 Key 只选一个主节点；跨 Slot 在脚本发送前失败，ASK 使用独占临时连接。
 一次执行的取消状态与总 commandTimeout 跨 NOSCRIPT/MOVED/ASK 共享，不给每个子请求重置时限。
+
+## 容量默认值与配置约定
+
+以下限制作用于每个 Client 的 `scripts()` 注册执行器，不是进程全局限制，也不是 Redis 服务端的脚本缓存配置。
+Cluster 的注册执行器在各节点间共用这份额度，不按节点数量倍增。
+通过 `BobaStrawScriptOptions` 自定义额度；不配置时使用下表默认值。
+
+| 配置项 | 默认值 | 统计范围与达到上限后的行为 |
+| --- | --- | --- |
+| `maxRegisteredScripts` | 1,024 | 本地注册名称对应的定义数量。继续注册新定义时抛出 `BobaStrawBackpressureException`，不淘汰已有定义。 |
+| `maxScriptBytes` | 16 MiB（16,777,216 字节） | 所有注册定义的正文总字节数，不是单脚本上限。String 正文按 UTF-8 编码计数，byte[] 按原始长度计数；新增正文将超过额度时拒绝注册。 |
+| `maxCacheHints` | 4,096 | 物理连接与 SHA 组合的成功提示数量。超过时按最近使用顺序淘汰旧提示，不删除脚本定义；无提示的下一次执行使用 EVAL。 |
+| `maxInFlightExecutions` | 4,096 | 尚未结束的逻辑脚本执行数量；同一次执行中的 NOSCRIPT 恢复和重定向不另占逻辑额度。满额时抛出 `BobaStrawBackpressureException` 拒绝新执行，已有执行继续。 |
+
+同名、同正文、同 output 的幂等注册不重复占额度；相同正文注册为不同名称则分别计数、计字节。
+名称必须非空且 `String.length()` 不超过 256（UTF-16 code unit）；这是固定输入约束，不计划开放为容量选项。
+
+Standalone、Sentinel、Cluster 的 Builder 均接收不可变的
+`BobaStrawScriptOptions`，未指定时保持上表默认值；四项容量均必须为正数。
+配置在 Client 创建时确定，不支持运行中缩容或静默移除定义。
+
+```java
+BobaStrawClient client = BobaStrawClient.builder()
+    .scriptOptions(BobaStrawScriptOptions.builder()
+        .maxRegisteredScripts(256)
+        .maxScriptBytes(8L * 1024L * 1024L)
+        .maxCacheHints(2048)
+        .maxInFlightExecutions(1024)
+        .build())
+    .build();
+```
+
+Cluster 和 Sentinel 使用相同的 `scriptOptions(...)` 方法；配置对象可安全地在多个 Client 间复用，
+但各 Client 的额度分别统计。
+
+这些限制不是总内存上限，也不替代连接队列和 callback 的准入限制：即使脚本额度未满，执行仍可能因其他容量限制而被拒绝。
+脚本正文总量也不包含参数、编码帧与在途结果的内存。通常沿用默认值即可；需要调整时，按注册定义数量、正文总量、
+活跃连接/SHA 组合数量和实际并发量分别评估，而不是将四项一起放大。
 
 ## 执行与显式预热
 

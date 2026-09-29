@@ -308,7 +308,8 @@ class ScriptRegistryTest {
     void boundedDefinitionsAndHintsAndCloseCleanup() throws Exception {
         try (Peer peer = new Peer(); BobaStrawClient client = peer.client(2000)) {
             BobaStrawScripts scripts = new BobaStrawScripts(keys -> client.scriptTarget(),
-                Duration.ofSeconds(2), true, 2, 16, 1);
+                Duration.ofSeconds(2), true, BobaStrawScriptOptions.builder()
+                    .maxRegisteredScripts(2).maxScriptBytes(16).maxCacheHints(1).build());
             scripts.register("a", "return 1", ScriptOutput.integer());
             scripts.register("b", "return 2", ScriptOutput.integer());
             assertThrows(BobaStrawBackpressureException.class,
@@ -326,6 +327,32 @@ class ScriptRegistryTest {
                 () -> scripts.register("a", "return 1", ScriptOutput.integer()));
             request.reply("-NOSCRIPT missing\r\n");
             assertNull(peer.requests.poll(100, TimeUnit.MILLISECONDS));
+        }
+    }
+
+    @Test
+    void configuredAdmissionReleasesOnCancellationAndCompletion() throws Exception {
+        try (Peer peer = new Peer(); BobaStrawClient client = BobaStrawClient.builder()
+            .endpoint("127.0.0.1", peer.listener.getLocalPort()).protocol(ProtocolVersion.RESP2)
+            .commandTimeout(Duration.ofSeconds(5))
+            .scriptOptions(BobaStrawScriptOptions.builder().maxRegisteredScripts(1)
+                .maxScriptBytes(8).maxCacheHints(1).maxInFlightExecutions(1).build()).build()) {
+            client.scripts().register("one", "return 1", ScriptOutput.integer());
+            client.scripts().register("one", "return 1", ScriptOutput.integer());
+            assertThrows(BobaStrawBackpressureException.class,
+                () -> client.scripts().register("two", "", ScriptOutput.integer()));
+            CompletableFuture<Long> first = call(client);
+            Request cancelled = peer.next("EVAL");
+            assertThrows(BobaStrawBackpressureException.class, () -> call(client));
+            assertTrue(first.cancel(false));
+            CompletableFuture<Long> second = call(client);
+            Request next = peer.next("EVAL");
+            cancelled.reply(":99\r\n");
+            next.reply(":2\r\n");
+            assertEquals(Long.valueOf(2), second.get(3, TimeUnit.SECONDS));
+            CompletableFuture<Long> third = call(client);
+            peer.next("EVALSHA").reply(":3\r\n");
+            assertEquals(Long.valueOf(3), third.get(3, TimeUnit.SECONDS));
         }
     }
 

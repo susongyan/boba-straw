@@ -31,6 +31,7 @@ public final class BobaStrawScripts {
     private final int maxDefinitions;
     private final long maxBytes;
     private final int maxHints;
+    private final int maxInFlightExecutions;
     private final Map<String, Definition> definitions = new LinkedHashMap<String, Definition>();
     private final Map<HintKey, Object> hints = new LinkedHashMap<HintKey, Object>(16, 0.75f, true);
     private final Set<Operation<?>> operations = new HashSet<Operation<?>>();
@@ -38,17 +39,23 @@ public final class BobaStrawScripts {
     private boolean closed;
 
     BobaStrawScripts(Router router, Duration timeout, boolean binary) {
-        this(router, timeout, binary, 1024, 16L * 1024L * 1024L, 4096);
+        this(router, timeout, binary, BobaStrawScriptOptions.defaults());
     }
 
     BobaStrawScripts(Router router, Duration timeout, boolean binary,
                      int maxDefinitions, long maxBytes, int maxHints) {
+        this(router, timeout, binary, BobaStrawScriptOptions.builder()
+            .maxRegisteredScripts(maxDefinitions).maxScriptBytes(maxBytes).maxCacheHints(maxHints).build());
+    }
+
+    BobaStrawScripts(Router router, Duration timeout, boolean binary, BobaStrawScriptOptions options) {
         this.router = router;
         this.timeoutNanos = timeout.toNanos();
         this.binary = binary;
-        this.maxDefinitions = maxDefinitions;
-        this.maxBytes = maxBytes;
-        this.maxHints = maxHints;
+        this.maxDefinitions = options.maxRegisteredScripts();
+        this.maxBytes = options.maxScriptBytes();
+        this.maxHints = options.maxCacheHints();
+        this.maxInFlightExecutions = options.maxInFlightExecutions();
     }
 
     /** Local only. Identical registration is idempotent; conflicting names are rejected. */
@@ -108,7 +115,7 @@ public final class BobaStrawScripts {
         final Operation<T> operation = new Operation<T>(definition, output, keys, arguments);
         synchronized (this) {
             ensureOpen();
-            if (operations.size() >= 4096) {
+            if (operations.size() >= maxInFlightExecutions) {
                 throw new BobaStrawBackpressureException("In-flight script capacity is exhausted");
             }
             operations.add(operation);

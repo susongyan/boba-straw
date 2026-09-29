@@ -44,8 +44,9 @@ Raw 可发送部分形式不代表这些 API 已实现或验收。
 
 - 三种 Client 新增 scripts()；String 按名称异步执行，Standalone executeBinary 保留原始 Key/参数。
   注册快照正文并由 JDK SHA-1 计算摘要，结构化 output 校验，无网络注册或隐式 SCRIPT LOAD。
-- 注册默认硬上限 1,024 定义/16 MiB 正文/名称 256 字符；提示 4,096 条、逻辑在途 4,096 个。
-  本版不暴露脚本容量调参入口；连接和 callback 的原准入仍独立生效。
+- 注册默认上限 1,024 定义/16 MiB 正文；提示 4,096 条、逻辑在途 4,096 个。
+  三种拓扑均通过 Builder 的 `scriptOptions(BobaStrawScriptOptions)` 调整这四项额度，
+  名称长度仍固定为 256 个 UTF-16 code unit；连接和 callback 的原准入仍独立生效。
 - 提示按物理 NioConnection 对象身份与 SHA 隔离，同端点重连获得新身份；成功先记提示再解码。
   旧对象成功需通过当前目标判定；NOSCRIPT 比较观察 token 后失效。关闭连接的无效条目在
   下一次提示访问时清理（内存仍受硬上限约束），Client close 全部清理，不注册无界 close listener。

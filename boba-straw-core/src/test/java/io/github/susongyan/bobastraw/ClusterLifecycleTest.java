@@ -25,6 +25,16 @@ import static org.junit.jupiter.api.Assertions.*;
 @Tag("fault-injection")
 class ClusterLifecycleTest {
     @Test
+    void scriptOptionsApplyToClusterRegistry() throws Exception {
+        try (Peer peer = new Peer(); BobaStrawClusterClient client = builder(peer)
+            .scriptOptions(BobaStrawScriptOptions.builder().maxRegisteredScripts(1).build()).build()) {
+            client.scripts().register("one", "return 1", ScriptOutput.integer());
+            assertThrows(BobaStrawBackpressureException.class,
+                () -> client.scripts().register("two", "return 2", ScriptOutput.integer()));
+        }
+    }
+
+    @Test
     void registeredScriptsReevaluateHintsAfterMoved() throws Exception {
         try (Peer source = new Peer(); Peer destination = new Peer();
              BobaStrawClusterClient client = builder(source).build()) {
