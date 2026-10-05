@@ -57,9 +57,9 @@ AUTO 先尝试 HELLO 3，在明确不支持时回退 RESP2；认证失败不是�
 
 | 场景 | 用法 | 当前范围 |
 | --- | --- | --- |
-| 普通命令 | sync().get / async().get / binary().get 等 | Standalone 支持三种；Cluster/Sentinel 为 String async |
-| 批量发送 | pipeline().typed() 入队，executeTyped() 提交 | Standalone String；非原子操作 |
-| 事务 | transaction().typed() 入队，execTyped() 提交 | Standalone String；使用 try-with-resources |
+| 普通命令 | sync().get / async().get / binary().get 等 | 三拓扑 String sync/async 与 binary async |
+| 批量发送 | pipeline().typed() 入队，executeTyped() 提交 | 三拓扑 String；Cluster 整批同 Slot；非原子操作 |
+| 事务 | transaction().typed() 入队，execTyped() 提交 | 三拓扑 String；Cluster 使用 transaction(routingKey)；使用 try-with-resources |
 | 游标分页 | scan().scan/hscan/sscan/zscan | 异步 String；Cluster 仅后三种单 Key 扫描 |
 | 未封装普通命令 | executeAsync 等 Raw 出口 | 核对 Key、连接状态和拓扑限制，不使用 internal 包 |
 
@@ -80,7 +80,7 @@ boba:
 不要提交带真实凭据的 URI，也不要打印 URI。AUTO 使用 HELLO 3，显式 RESP2 跳过 HELLO。
 使用 Starter 时依赖坐标为 `io.github.susongyan:boba-straw-spring-boot-starter:0.1.0-SNAPSHOT`。
 Starter 当前仅自动配置单个 Standalone Client；Sentinel/Cluster 和多客户端自动配置、Health、
-Micrometer 集成尚未提供。核心 SDK 已有 Sentinel/Cluster 普通命令入口，不代表 Starter 已支持配置它们。
+Micrometer 集成尚未提供。核心 SDK 的 Sentinel/Cluster 能力不代表 Starter 已支持配置它们。
 核心 TLS 仍未实现。Boot 3 的自动配置入口存在，但 Boot 版本矩阵与独立示例尚未验收。
 Spring 注入的 Client 由容器关闭，业务方法不应自行 close。
 

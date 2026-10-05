@@ -25,6 +25,111 @@ import static org.junit.jupiter.api.Assertions.*;
 @Tag("fault-injection")
 class ClusterLifecycleTest {
     @Test
+    void topologyRetirementPreservesAmbiguousExecAndClosesLease() throws Exception {
+        try (Peer source = new Peer(); Peer destination = new Peer();
+             BobaStrawClusterClient client = builder(source).build();
+             BobaStrawTransaction transaction = client.transaction("key")) {
+            source.holdExec = true;
+            transaction.command("INCR", "key");
+            CompletableFuture<List<RespValue>> result = transaction.exec().toCompletableFuture();
+            assertTrue(source.execReceived.await(2, TimeUnit.SECONDS));
+            source.slots = Peer.slots(destination.port());
+            client.refreshTopology().toCompletableFuture().get(2, TimeUnit.SECONDS);
+            assertTrue(failure(result) instanceof BobaStrawCommandMayHaveExecutedException);
+            Session lease = source.sessions.stream().filter(s -> s.commands.contains("EXEC")).findFirst().get();
+            assertTrue(lease.closed.await(2, TimeUnit.SECONDS));
+            assertEquals(0, destination.appCommands.get());
+        }
+    }
+
+    @Test
+    void blockingCancellationClosesSocketAndMovedIsNotReplayed() throws Exception {
+        try (Peer source = new Peer(); Peer destination = new Peer();
+             BobaStrawClusterClient client = builder(source).build()) {
+            source.holdBlocking = true;
+            CompletableFuture<List<String>> blocked = client.async().blpop(0, "key").toCompletableFuture();
+            assertTrue(source.blockingReceived.await(2, TimeUnit.SECONDS));
+            assertTrue(blocked.cancel(false));
+            Session dedicated = source.sessions.stream().filter(s -> s.commands.contains("BLPOP")).findFirst().get();
+            assertTrue(dedicated.closed.await(2, TimeUnit.SECONDS));
+            source.holdBlocking = false;
+            source.redirect = "MOVED " + ClusterSlot.of("key") + " 127.0.0.1:" + destination.port();
+            assertTrue(failure(client.async().blpop(1, "key").toCompletableFuture())
+                instanceof BobaStrawServerException);
+            assertEquals(0, destination.appCommands.get());
+        }
+    }
+
+    @Test
+    void pipelineRejectsCrossSlotBeforeSendingAndDoesNotReplayMoved() throws Exception {
+        try (Peer source = new Peer(); Peer destination = new Peer();
+             BobaStrawClusterClient client = builder(source).build()) {
+            BobaStrawPipeline cross = client.pipeline().command("GET", "a").command("GET", "b");
+            assertThrows(IllegalArgumentException.class, cross::executeTyped);
+            assertEquals(0, source.appCommands.get());
+            source.redirect = "MOVED " + ClusterSlot.of("key") + " 127.0.0.1:" + destination.port();
+            BobaStrawPipeline pipeline = client.pipeline();
+            BobaStrawCommandHandle<String> first = pipeline.typed().get("key");
+            BobaStrawCommandHandle<String> second = pipeline.typed().get("key");
+            BobaStrawBatchResult result = pipeline.executeTyped().toCompletableFuture().get(2, TimeUnit.SECONDS);
+            assertThrows(BobaStrawServerException.class, () -> result.get(first));
+            assertThrows(BobaStrawServerException.class, () -> result.get(second));
+            assertEquals(2, source.appCommands.get());
+            assertEquals(0, destination.appCommands.get());
+        }
+    }
+
+    @Test
+    void binaryMovedAndAskReuseRoutingWithoutTextConversion() throws Exception {
+        byte[] key = {(byte) 0xff, '{', 'x', '}', 0};
+        for (String redirect : new String[] {"MOVED", "ASK"}) {
+            try (Peer source = new Peer(); Peer destination = new Peer();
+                 BobaStrawClusterClient client = builder(source).build()) {
+                source.redirect = redirect + " " + ClusterSlot.ofBytes(key) + " 127.0.0.1:" + destination.port();
+                assertArrayEquals("tea".getBytes(StandardCharsets.UTF_8),
+                    client.binary().get(key).toCompletableFuture().get(2, TimeUnit.SECONDS));
+                assertEquals(1, destination.appCommands.get());
+                if ("ASK".equals(redirect)) {
+                    assertTrue(destination.sessions.get(0).closed.await(2, TimeUnit.SECONDS));
+                    assertEquals(Arrays.asList("ASKING", "GET"), destination.sessions.get(0).commands);
+                }
+                assertThrows(IllegalArgumentException.class,
+                    () -> client.binary().mget(new byte[] {'a'}, new byte[] {'b'}));
+            }
+        }
+    }
+
+    @Test
+    void syncOrdinaryCommandsAndRedirectsDoNotDependOnCallbackWorker() throws Exception {
+        for (String redirect : new String[] {"MOVED", "ASK"}) {
+            try (Peer source = new Peer(); Peer destination = new Peer();
+                 BobaStrawClusterClient client = builder(source).build()) {
+                CountDownLatch entered = new CountDownLatch(1);
+                CountDownLatch release = new CountDownLatch(1);
+                source.businessGate = new CountDownLatch(1);
+                java.util.concurrent.CompletionStage<Void> held = client.async().get("warm").thenAccept(value -> {
+                    entered.countDown();
+                    try {
+                        release.await();
+                    } catch (InterruptedException error) {
+                        Thread.currentThread().interrupt();
+                    }
+                });
+                source.businessGate.countDown();
+                assertTrue(entered.await(2, TimeUnit.SECONDS));
+                try {
+                    source.redirect = redirect + " " + ClusterSlot.of("sync") + " 127.0.0.1:" + destination.port();
+                    assertEquals("tea", CompletableFuture.supplyAsync(() -> client.sync().get("sync"))
+                        .get(2, TimeUnit.SECONDS));
+                } finally {
+                    release.countDown();
+                }
+                held.toCompletableFuture().get(2, TimeUnit.SECONDS);
+            }
+        }
+    }
+
+    @Test
     void scriptOptionsApplyToClusterRegistry() throws Exception {
         try (Peer peer = new Peer(); BobaStrawClusterClient client = builder(peer)
             .scriptOptions(BobaStrawScriptOptions.builder().maxRegisteredScripts(1).build()).build()) {
@@ -297,7 +402,7 @@ class ClusterLifecycleTest {
     }
 
     private static final class Peer implements AutoCloseable {
-        final ServerSocket server = new ServerSocket(0);
+        final ServerSocket server = LoopbackTestServer.open();
         final List<Session> sessions = new CopyOnWriteArrayList<Session>();
         final AtomicReference<Throwable> failure = new AtomicReference<Throwable>();
         final AtomicInteger appCommands = new AtomicInteger();
@@ -306,6 +411,11 @@ class ClusterLifecycleTest {
         volatile boolean closing;
         volatile boolean dropNext;
         volatile boolean holdAsking;
+        volatile boolean holdExec;
+        volatile boolean holdBlocking;
+        final CountDownLatch execReceived = new CountDownLatch(1);
+        final CountDownLatch blockingReceived = new CountDownLatch(1);
+        volatile CountDownLatch businessGate;
         volatile boolean blobErrorNext;
         volatile String redirect;
         volatile String slots;
@@ -363,6 +473,7 @@ class ClusterLifecycleTest {
                     RespCodec.Decoder decoder = new RespCodec.Decoder();
                     byte[] bytes = new byte[4096];
                     int read;
+                    boolean inTransaction = false;
                     while ((read = socket.getInputStream().read(bytes)) != -1) {
                         decoder.feed(bytes, read);
                         RespValue value;
@@ -379,8 +490,30 @@ class ClusterLifecycleTest {
                                     continue;
                                 }
                                 reply = "+OK\r\n";
+                            } else if ("MULTI".equals(name)) {
+                                inTransaction = true;
+                                reply = "+OK\r\n";
+                            } else if ("EXEC".equals(name)) {
+                                peer.execReceived.countDown();
+                                inTransaction = false;
+                                if (peer.holdExec) {
+                                    continue;
+                                }
+                                reply = "*1\r\n:1\r\n";
+                            } else if (inTransaction) {
+                                reply = "+QUEUED\r\n";
                             } else {
+                                if ("BLPOP".equals(name) || "BRPOP".equals(name)) {
+                                    peer.blockingReceived.countDown();
+                                    if (peer.holdBlocking) {
+                                        continue;
+                                    }
+                                }
                                 peer.appCommands.incrementAndGet();
+                                CountDownLatch gate = peer.businessGate;
+                                if (gate != null && !gate.await(2, TimeUnit.SECONDS)) {
+                                    throw new AssertionError("Business response gate was not released");
+                                }
                                 if (peer.dropNext) {
                                     peer.dropNext = false;
                                     return;

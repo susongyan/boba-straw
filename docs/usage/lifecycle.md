@@ -22,7 +22,11 @@
 subscribe/psubscribe 返回 CompletionStage<BobaStrawSubscription>，完成意味着确认成功。
 在应用生命周期中保存 handle，在停止时 close；close 发起异步退订，不能视为全部 listener 已结束。
 Client.close 是最终资源兜底。listener 容量耗尽可能关闭连接，不能假设自动恢复订阅或消息不丢。
-当前 API 没有完整的订阅故障通知/恢复契约，业务需要持久投递时不能仅依赖 Pub/Sub。
+内置 handle 的 `termination()` 提供连接终止观察：未主动 close 时的断连/拓扑退休异常完成，
+主动 close 后传输终止正常完成。订阅确认后就建立一次观察；取消观察 Future 不会关闭订阅。
+它不是退订 ACK 或回调排空屏障，也不提供自动恢复。需要持久投递时不能仅依赖 Pub/Sub。
+三种拓扑都可使用经典订阅；Cluster/Sentinel 切换后可再次使用保存的 pubSub facade 订阅当前主节点，
+由业务决定恢复时机，不能承诺切换期间消息无损。
 
 ## 事务
 
@@ -41,11 +45,13 @@ WATCH 冲突时不要读取句柄；未冲突再通过 `result.get(handle)` 获�
 
 ## 阻塞 List 命令
 
-Standalone 的 sync()/async() 提供 blpop(long timeoutSeconds, String... keys) 和 brpop。
+三种拓扑的 sync()/async() 提供 blpop(long timeoutSeconds, String... keys) 和 brpop。
 每次调用按需创建单次专用连接，完成、超时、取消或 Client 关闭后销毁，不占用共享连接。
-默认同时最多 32 条，可用 Builder.maxBlockingConnections(...) 设置；超限明确拒绝，不排无限队列。
+每个内部节点 Client 默认同时最多 32 条，Standalone 可用 Builder.maxBlockingConnections(...) 设置；
+拓扑 Builder 暂不暴露此参数，超限明确拒绝，不排无限队列。
 返回列表为 [key, value]；服务端正常等待超时返回空列表。客户端 commandTimeout 始终生效，
 即使 timeoutSeconds=0 也不是无限等待。需要等待服务端超时结果时，将客户端超时设得更长。
 取消从客户端方法最初返回的 Future 发起；同步等待被中断也关闭该次专用连接。
-不承诺被取消的 POP 没有消费元素，也不自动补发。其他阻塞命令、Cluster 和二进制阻塞接口仍待扩展。
+不承诺被取消的 POP 没有消费元素，也不自动补发。Cluster 多 Key 必须同 Slot；
+MOVED/ASK 也返回失败、不重放阻塞操作，后续调用使用刷新的拓扑。其他阻塞命令和二进制阻塞接口仍待扩展。
 不要通过共享 Raw/Pipeline 发送阻塞命令。

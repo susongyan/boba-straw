@@ -3,6 +3,11 @@
 日期：2026-09-28；本轮基线 `c49bcdf` + 第五批工作树。
 范围冻结于 [命令模型](../architecture/command-model.md)，不是 Redis 全命令覆盖。
 
+后续更新（2026-10-06）：C6 已补拓扑能力，现状见[核心收尾](core-completion-plan.md)。
+H 诊断已定位并修复 Java 通配监听与 VS Code HTTP loopback 监听共存的具体路径，见
+[诊断记录](../testing/binary-resp-diagnostics.md)；不据此追认所有历史等待失败同因。
+本文后续条目保留 C5 当时的实现和证据范围。
+
 ## 功能与验收对应
 
 | 范围 | 已实现入口 | 验收测试 |

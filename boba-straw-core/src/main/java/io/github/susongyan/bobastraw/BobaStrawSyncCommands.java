@@ -8,10 +8,24 @@ import java.util.Set;
 
 /** Blocking facade over transport completions from Boba Straw's asynchronous NIO core. */
 public final class BobaStrawSyncCommands {
-    private final BobaStrawClient client;
+    private final CommandExecutor transport;
+    private final java.util.function.Function<String[], java.util.concurrent.CompletionStage<RespValue>> blocking;
 
     BobaStrawSyncCommands(BobaStrawClient client) {
-        this.client = client;
+        this.transport = client::executeTransport;
+        this.blocking = command -> client.executeBlocking(command, true);
+    }
+
+    BobaStrawSyncCommands(CommandExecutor transport) {
+        this(transport, command -> {
+            throw new UnsupportedOperationException("Blocking commands need a topology dedicated connection");
+        });
+    }
+
+    BobaStrawSyncCommands(CommandExecutor transport,
+        java.util.function.Function<String[], java.util.concurrent.CompletionStage<RespValue>> blocking) {
+        this.transport = transport;
+        this.blocking = blocking;
     }
 
     public Long bitCount(String key) {
@@ -85,7 +99,7 @@ public final class BobaStrawSyncCommands {
     private <T> T typed(String command, CommandDecoder<T> decoder, String... arguments) {
         TypedCommand<T> invocation = new TypedCommand<T>(command, decoder, arguments);
         // Decode on the waiting caller, never on the EventLoop or a callback worker.
-        RespValue response = client.await(client.executeTransport(invocation.name(), invocation.arguments()));
+        RespValue response = BobaStrawClient.await(transport.executeAsync(invocation.name(), invocation.arguments()));
         return invocation.decoder().apply(response);
     }
 
@@ -95,15 +109,15 @@ public final class BobaStrawSyncCommands {
 
     /** Dedicated blocking pop; client commandTimeout applies even when timeoutSeconds is zero. */
     public List<String> blpop(long timeoutSeconds, String... keys) {
-        return BobaStrawAsyncCommands.stringList(client.await(client.executeBlocking(
-            BobaStrawAsyncCommands.blockingPopArguments("BLPOP", timeoutSeconds, keys), true
+        return BobaStrawAsyncCommands.stringList(BobaStrawClient.await(blocking.apply(
+            BobaStrawAsyncCommands.blockingPopArguments("BLPOP", timeoutSeconds, keys)
         )));
     }
 
     /** Dedicated blocking pop from the end of a list. */
     public List<String> brpop(long timeoutSeconds, String... keys) {
-        return BobaStrawAsyncCommands.stringList(client.await(client.executeBlocking(
-            BobaStrawAsyncCommands.blockingPopArguments("BRPOP", timeoutSeconds, keys), true
+        return BobaStrawAsyncCommands.stringList(BobaStrawClient.await(blocking.apply(
+            BobaStrawAsyncCommands.blockingPopArguments("BRPOP", timeoutSeconds, keys)
         )));
     }
 
@@ -329,7 +343,8 @@ public final class BobaStrawSyncCommands {
     }
 
     private <T> T executeScript(TypedCommand<T> command) {
-        return command.decoder().apply(client.await(client.executeTransport(command.name(), command.arguments())));
+        return command.decoder().apply(BobaStrawClient.await(
+            transport.executeAsync(command.name(), command.arguments())));
     }
 
     private String string(String command, String... arguments) {

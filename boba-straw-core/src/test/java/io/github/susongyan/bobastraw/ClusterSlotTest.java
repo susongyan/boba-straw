@@ -32,7 +32,7 @@ class ClusterSlotTest {
         ClusterSeedServer reachableSeed = new ClusterSeedServer();
         reachableSeed.start();
 
-        ServerSocket unavailable = new ServerSocket(0);
+        ServerSocket unavailable = LoopbackTestServer.open();
         int unavailablePort = unavailable.getLocalPort();
         unavailable.close();
 
@@ -49,7 +49,7 @@ class ClusterSlotTest {
     }
 
     private static final class ClusterSeedServer implements AutoCloseable {
-        private final ServerSocket serverSocket = new ServerSocket(0);
+        private final ServerSocket serverSocket = LoopbackTestServer.open();
         private final CountDownLatch complete = new CountDownLatch(1);
         private final AtomicReference<Throwable> failure = new AtomicReference<Throwable>();
 

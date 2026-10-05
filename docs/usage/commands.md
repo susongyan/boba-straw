@@ -100,8 +100,11 @@ EXEC 内单条错误不回滚其他命令。事务没有 WATCH 时无须为了�
 旧 Raw `exec()` 保留冲突返回空列表的兼容行为；新代码优先用 execTyped() 表达结果。
 生命周期与专用连接规则见[生命周期](lifecycle.md)。
 
-批量目录目前仅 Standalone String 的 16 个高频方法，不与全部 async() 方法一一对应；
-不支持 binary 批量或 Cluster/Sentinel 批量。不要绕过限制手工发送 MULTI/EXEC。
+批量目录支持三种拓扑 String 高频方法及 Lua，不与全部 async() 方法一一对应；不支持 binary 批量。
+Cluster Pipeline 整批同 Slot，事务使用 `cluster.transaction(routingKey)`，所有 Key 必须匹配该 Slot；
+Sentinel 使用 `sentinel.transaction()`。拓扑切换不迁移或重放状态型操作。
+不要绕过限制手工发送 MULTI/EXEC。边界见 [Cluster](../architecture/cluster-topology.md) 与
+[Sentinel](../architecture/sentinel-topology.md)。
 
 ## Scan 的边界
 

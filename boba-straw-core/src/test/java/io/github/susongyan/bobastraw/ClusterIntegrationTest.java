@@ -16,6 +16,61 @@ import static org.junit.jupiter.api.Assertions.*;
 @EnabledIfSystemProperty(named = "boba.straw.runCluster", matches = "true")
 class ClusterIntegrationTest {
     @Test
+    void dedicatedCapabilitiesRemainSingleSlot() throws Exception {
+        assertTestContainer();
+        for (ProtocolVersion protocol : new ProtocolVersion[] {ProtocolVersion.RESP2, ProtocolVersion.AUTO}) {
+            try (BobaStrawClusterClient client = cluster(protocol, 17401)) {
+                TopologyDedicatedTestFixture.verify(client.async(), client.sync(), client.scripts(),
+                    client.pubSub(), client::transaction, true,
+                    (command, args) -> client.executeWithKeysAsync(new String[0], command, args));
+            }
+        }
+    }
+
+    @Test
+    void binaryAndSyncCallsUseSlotsAndPreserveBytes() throws Exception {
+        assertTestContainer();
+        for (ProtocolVersion protocol : new ProtocolVersion[] {ProtocolVersion.RESP2, ProtocolVersion.AUTO}) {
+            try (BobaStrawClusterClient client = cluster(protocol)) {
+                String textKey = "boba-c6:{" + UUID.randomUUID() + "}";
+                byte[] prefix = textKey.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                byte[] key = java.util.Arrays.copyOf(prefix, prefix.length + 1);
+                key[prefix.length] = (byte) 0xff;
+                byte[] value = {(byte) 0xfe, 0};
+                try {
+                    assertEquals("OK", client.sync().set(textKey, "tea"));
+                    assertEquals("tea", client.sync().get(textKey));
+                    BobaStrawPipeline pipeline = client.pipeline();
+                    BobaStrawCommandHandle<String> read = pipeline.typed().get(textKey);
+                    BobaStrawCommandHandle<Long> bad = pipeline.typed().incr(textKey);
+                    BobaStrawBatchResult batch = TypedTopologyTestFixture.await(pipeline.executeTyped());
+                    assertEquals("tea", batch.get(read));
+                    assertThrows(BobaStrawServerException.class, () -> batch.get(bad));
+                    BobaStrawPipeline crossSlot = client.pipeline().command("GET", "a").command("GET", "b");
+                    assertThrows(IllegalArgumentException.class, crossSlot::executeTyped);
+                    assertArrayEquals(new byte[] {'O', 'K'},
+                        TypedTopologyTestFixture.await(client.binary().set(key, value)));
+                    assertArrayEquals(value, TypedTopologyTestFixture.await(client.binary().get(key)));
+                    assertThrows(IllegalArgumentException.class,
+                        () -> client.binary().mget(new byte[] {'a'}, new byte[] {'b'}));
+                    client.scripts().register("read-binary", "return redis.call('GET', KEYS[1])",
+                        ScriptOutput.bytes());
+                    for (int i = 0; i < 2; i++) {
+                        assertArrayEquals(value, TypedTopologyTestFixture.await(client.scripts().executeBinary(
+                            "read-binary", ScriptOutput.bytes(), new byte[][] {key})));
+                    }
+                    assertArrayEquals(value, TypedTopologyTestFixture.await(client.binary().eval(
+                        "return redis.call('GET', KEYS[1])".getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                        ScriptOutput.bytes(), new byte[][] {key})));
+                } finally {
+                    TypedTopologyTestFixture.await(client.binary().del(key));
+                    client.sync().del(textKey);
+                }
+            }
+        }
+    }
+
+    @Test
     void luaAskUsesDestinationCacheWithoutLoadingItImplicitly() throws Exception {
         assertTestContainer();
         for (ProtocolVersion protocol : new ProtocolVersion[] {ProtocolVersion.RESP2, ProtocolVersion.AUTO}) {
@@ -170,9 +225,23 @@ class ClusterIntegrationTest {
                         ScriptOutput.string());
                     assertEquals("retained", TypedTopologyTestFixture.await(client.scripts().execute(
                         "read", ScriptOutput.string(), new String[] {key})));
-                    reply(promoted.executeAsync("CLUSTER", "FAILOVER"));
-                    awaitOwner(discovery, ClusterSlot.of(key), replica);
-                    awaitClientNode(client, replica);
+                    BobaStrawPubSub pubSub = client.pubSub();
+                    try (BobaStrawTransaction tx = client.transaction(key);
+                         BobaStrawSubscription subscription = TypedTopologyTestFixture.await(
+                             pubSub.subscribe(key + ":channel", ignored -> { }))) {
+                        TypedTopologyTestFixture.await(tx.watch(key));
+                        java.util.concurrent.CompletableFuture<Void> ended = subscription.termination().toCompletableFuture();
+                        reply(promoted.executeAsync("CLUSTER", "FAILOVER"));
+                        awaitOwner(discovery, ClusterSlot.of(key), replica);
+                        awaitClientNode(client, replica);
+                        assertThrows(java.util.concurrent.ExecutionException.class,
+                            () -> ended.get(5, TimeUnit.SECONDS));
+                        assertThrows(BobaStrawCommandNotSentException.class, tx::exec);
+                    }
+                    try (BobaStrawSubscription renewed = TypedTopologyTestFixture.await(
+                        pubSub.subscribe(key + ":channel", ignored -> { }))) {
+                        assertNotNull(renewed);
+                    }
                     assertEquals("retained", reply(client.executeAsync("GET", key)).asString());
                     assertEquals("retained", TypedTopologyTestFixture.await(client.scripts().execute(
                         "read", ScriptOutput.string(), new String[] {key})));

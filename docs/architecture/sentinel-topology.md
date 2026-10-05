@@ -1,7 +1,7 @@
 # Sentinel 主节点发现与连接生命周期
 
-更新：2026-09-28；核心收尾 C3 与 C5 typed 复用。覆盖普通 String Raw、async typed 与主节点连接管理，
-不表示 Sentinel 的 binary/sync facade、Pipeline、事务、阻塞和 Pub/Sub 组合已完成。
+更新：2026-10-05；C6.1a 增加 binary 普通异步 facade 与注册脚本二进制执行。
+现已增加 sync 普通 facade、String Pipeline、事务、BLPOP/BRPOP 和经典 Pub/Sub；验收见核心收尾计划。
 
 ## 接入
 
@@ -26,8 +26,37 @@ try (BobaStrawSentinelClient client = BobaStrawSentinelClient.builder()
 
 两套认证彼此独立，禁止将 Redis 凭据自动用作 Sentinel 凭据；没有认证时可省略对应配置。
 每条物理连接分别握手。AUTO 使用 HELLO 3 协商，而非识别服务端版本；明确认证失败不触发 RESP2 回退。
-URI、DB 选择和同步 typed facade 暂未提供，不通过 Raw SELECT 改变共享连接状态。
+URI、DB 选择暂未提供，不通过 Raw SELECT 改变共享连接状态。
 外部 Resources 可以复用；先关闭 Client 再关闭其外部 Resources。
+
+`client.binary()` 复用既有二进制命令目录，Key/value 不经过 String 转码；
+例如 `client.binary().get(keyBytes)` 返回 `CompletionStage<byte[]>`。
+与 String 共用同一已验证主节点连接和失效处理；切换时不重发在途请求，
+未发现有效主节点时明确未发送。注册脚本也可使用 `scripts().executeBinary(...)`。
+本批不提供 Raw binary 或 binary Scan/批量；普通 binary 入口不绕过命令元数据准入。
+`sync()` 等待 transport 完成，不依赖用户 callback worker；BLPOP/BRPOP 仍使用专用连接。
+`pipeline()` 在提交时绑定主节点，不重放失败批次；typed 返回保留单项服务端错误。
+
+## 状态型能力的边界
+
+`client.transaction()`、`client.async().blpop(...)` 和 `client.pubSub().subscribe(...)`
+复用 Standalone 的租约、单次阻塞连接和订阅确认/退订机制。事务与 Pipeline 的 typed 脚本
+使用 Sentinel 的注册表；批内按名称调用入队 EVAL，不恢复 NOSCRIPT 或重放部分批次。
+
+没有专用调用时，不创建专用连接管理器或事务池。首次专用调用为当前已验证的主节点地址
+惰性创建一个内部 Client，共享外部 Resources，但会多一条控制用共享连接；事务池仍到首次事务才创建。
+专用连接分别握手/认证，目标绑定在 Sentinel 已验证的主节点代次；不会在每条专用连接重复 ROLE。
+原有周期 ROLE 校验与切换失效是整体保护，不能消除角色检查之后切换的窗口，不承诺网络分区 fencing。
+
+主节点失效、物理连接替换或地址切换时，退休这个管理器及全部旧租约、阻塞和订阅连接。
+新请求必须等待发现有效主节点后由业务再次发起；不把在途操作迁移到新主节点。
+事务取消/失败销毁、成功 EXEC/确认 UNWATCH 后归还；BLPOP/BRPOP 结束或取消即关闭，均有既有默认容量上限。
+本版 Sentinel 未暴露独立事务池调优配置，不能套用 Standalone Builder 的所有参数。
+
+保留 `pubSub()` facade 可以在切换后重新 subscribe；它每次选择当前代次，不缓存旧管理器。
+订阅成功后观察 `subscription.termination()`，意外断连异常完成，由业务决定重订阅。
+没有自动重订阅/消息补偿；主动 close 后正常完成只代表传输关闭，不保证退订 ACK 或业务回调排空。
+取消 termination 观察不关闭订阅。详细契约与 Cluster 的[专用能力边界](cluster-topology.md#专用能力如何绑定拓扑)一致。
 
 ## 发现与切换
 
@@ -87,5 +116,5 @@ Redis 7.4.2 一主一副本使用 17501–17502，三个 Sentinel 使用 27501�
 Redis 5/6.2/Valkey Sentinel、多宿主分区或长稳压力，不能将本环境结果泛化。
 详细结果见 [核心收尾计划](../implementation/core-completion-plan.md)。
 
-协议依据（2026-09-22 核对）：
+协议依据（2026-10-05 再次核对，主节点验证与重发现机制未变）：
 [Redis Sentinel client specification](https://redis.io/docs/latest/develop/reference/sentinel-clients/)。

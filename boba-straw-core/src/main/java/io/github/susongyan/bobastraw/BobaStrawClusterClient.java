@@ -42,6 +42,7 @@ public final class BobaStrawClusterClient implements AutoCloseable {
     private Node[] slots = new Node[16384];
     private boolean closed;
     private long topologyVersion;
+    private long dedicatedGeneration;
     private long refreshGeneration;
     private long refreshSuccesses;
     private long refreshFailures;
@@ -86,7 +87,7 @@ public final class BobaStrawClusterClient implements AutoCloseable {
             ) {
                 return redirectScript(source, scriptSlot(keys), error);
             }
-        }, timeout, false, builder.scriptOptions);
+        }, timeout, true, builder.scriptOptions);
         try {
             bootstrap();
             synchronized (lock) {
@@ -104,7 +105,138 @@ public final class BobaStrawClusterClient implements AutoCloseable {
 
     /** Typed ordinary String commands, with the same slot checks and redirects as the Raw API. */
     public BobaStrawAsyncCommands async() {
-        return new BobaStrawAsyncCommands(this::executeAsync);
+        return new BobaStrawAsyncCommands(this::executeAsync, command -> executeBlocking(command, false));
+    }
+
+    private CompletionStage<RespValue> executeBlocking(String[] command, boolean transport) {
+        Integer slot = ClusterCommandRouting.sameSlot(
+            java.util.Arrays.copyOfRange(command, 1, command.length - 1));
+        synchronized (lock) {
+            ensureOpen();
+            CompletionStage<RespValue> result = slots[slot.intValue()].client.executeBlocking(command, transport);
+            result.whenComplete((value, error) -> {
+                if (error != null) {
+                    requestRefresh();
+                }
+            });
+            return result;
+        }
+    }
+
+    /** Classic Pub/Sub on one primary, not sharded Pub/Sub. Re-subscription is explicit. */
+    public BobaStrawPubSub pubSub() {
+        return new BobaStrawPubSub(listener -> {
+            synchronized (lock) {
+                ensureOpen();
+                BobaStrawClient owner = anyPrimary().client;
+                return new BobaStrawPubSub.Binding(owner, owner.openPubSubConnection(listener));
+            }
+        });
+    }
+
+    /** All WATCH and command keys must use the routing key's slot; no transaction replay. */
+    public BobaStrawTransaction transaction(String routingKey) {
+        CommandArgs.text(routingKey);
+        final int slot = ClusterSlot.of(routingKey);
+        final Node selected;
+        final long selectedGeneration;
+        synchronized (lock) {
+            ensureOpen();
+            selected = slots[slot];
+            selectedGeneration = dedicatedGeneration;
+        }
+        BobaStrawScripts.Target generation = selected.client.scriptTarget();
+        return selected.client.transaction().bindTopology(() -> {
+            synchronized (lock) {
+                return !closed && dedicatedGeneration == selectedGeneration
+                    && slots[slot] == selected && generation.current.getAsBoolean();
+            }
+        }, command -> {
+            Integer actual = "WATCH".equals(command[0])
+                ? ClusterCommandRouting.sameSlot(tail(command))
+                : ClusterCommandRouting.slot(command[0], tail(command));
+            if (actual != null && actual.intValue() != slot) {
+                throw new IllegalArgumentException("CROSSSLOT: transaction keys must match the routing slot");
+            }
+        }, scripts);
+    }
+
+    private void replaceSlots(Node[] replacement) {
+        if (!java.util.Arrays.equals(slots, replacement)) {
+            dedicatedGeneration++;
+            // Conservative retirement: never continue stateful work across a changed slot snapshot.
+            for (Node node : nodes.values()) {
+                node.client.retireDedicatedForTopologyChange();
+            }
+        }
+        slots = replacement;
+    }
+
+    /** One-slot batch; MOVED/ASK remain errors and never reorder or replay the batch. */
+    public BobaStrawPipeline pipeline() {
+        return new BobaStrawPipeline((commands, retainErrors) -> {
+            Integer slot = null;
+            for (String[] command : commands) {
+                Integer next = ClusterCommandRouting.slot(command[0], tail(command));
+                if (next != null) {
+                    if (slot != null && !slot.equals(next)) {
+                        throw new IllegalArgumentException("CROSSSLOT: pipeline keys must share one slot");
+                    }
+                    slot = next;
+                }
+            }
+            final Node target;
+            synchronized (lock) {
+                ensureOpen();
+                target = slot == null ? anyPrimary() : slots[slot.intValue()];
+            }
+            CompletionStage<List<RespValue>> result = target.client.executeBatch(commands, retainErrors);
+            result.whenComplete((values, error) -> {
+                if (error != null) {
+                    requestRefresh();
+                } else {
+                    for (RespValue value : values) {
+                        if (value instanceof RespValue.Error || value instanceof RespValue.BlobError) {
+                            requestRefresh();
+                            break;
+                        }
+                    }
+                }
+            });
+            return result;
+        }, scripts);
+    }
+
+    /** Ordinary String calls wait for transport completion, including MOVED/ASK handling. */
+    public BobaStrawSyncCommands sync() {
+        return new BobaStrawSyncCommands((command, arguments) ->
+            execute(ClusterCommandRouting.slot(command, arguments), command, arguments, true),
+            command -> executeBlocking(command, true));
+    }
+
+    /** Binary-safe ordinary commands, routed using the original bytes of every key. */
+    public BobaStrawBinaryCommands binary() {
+        return BobaStrawBinaryCommands.withExecutor(new BinaryCommandExecutor() {
+            @Override
+            public CompletionStage<RespValue> executeAsync(
+                io.github.susongyan.bobastraw.internal.EncodedCommand command
+            ) {
+                throw new IllegalArgumentException("Cluster binary calls require key metadata");
+            }
+
+            @Override
+            public CompletionStage<RespValue> executeCommand(TypedCommand<?> command) {
+                Integer slot = command.binaryClusterSlot();
+                final Node target;
+                synchronized (lock) {
+                    ensureOpen();
+                    target = slot == null ? anyPrimary() : slots[slot.intValue()];
+                }
+                CommandFuture result = new CommandFuture(slot, null, command.binaryFrame());
+                result.send(target, 0);
+                return result;
+            }
+        });
     }
 
     public BobaStrawScripts scripts() {
@@ -141,7 +273,7 @@ public final class BobaStrawClusterClient implements AutoCloseable {
                 Node destination = node(endpoint);
                 Node[] replacement = slots.clone();
                 replacement[slot.intValue()] = destination;
-                slots = replacement;
+                replaceSlots(replacement);
                 topologyVersion++;
                 return destination.client.scriptTarget();
             }
@@ -193,12 +325,18 @@ public final class BobaStrawClusterClient implements AutoCloseable {
     }
 
     private CompletionStage<RespValue> execute(Integer slot, String command, String[] arguments) {
+        return execute(slot, command, arguments, false);
+    }
+
+    private CompletionStage<RespValue> execute(Integer slot, String command, String[] arguments,
+                                               boolean transportCompletion) {
         final Node target;
         synchronized (lock) {
             ensureOpen();
             target = slot == null ? anyPrimary() : slots[slot.intValue()];
         }
         CommandFuture result = new CommandFuture(slot, join(command, arguments));
+        result.transportCompletion = transportCompletion;
         result.send(target, 0);
         return result;
     }
@@ -452,7 +590,7 @@ public final class BobaStrawClusterClient implements AutoCloseable {
                 replacement[slot] = node(endpoints[slot]);
                 retained.add(endpoints[slot].id());
             }
-            slots = replacement;
+            replaceSlots(replacement);
             topologyVersion++;
             java.util.Iterator<Map.Entry<String, Node>> iterator = nodes.entrySet().iterator();
             while (iterator.hasNext()) {
@@ -509,13 +647,21 @@ public final class BobaStrawClusterClient implements AutoCloseable {
     private final class CommandFuture extends CompletableFuture<RespValue> {
         private final Integer slot;
         private final String[] command;
+        private final io.github.susongyan.bobastraw.internal.EncodedCommand binaryCommand;
         private CompletableFuture<?> pending;
         private NioConnection asking;
         private boolean terminal;
+        private boolean transportCompletion;
 
         private CommandFuture(Integer slot, String[] command) {
+            this(slot, command, null);
+        }
+
+        private CommandFuture(Integer slot, String[] command,
+                              io.github.susongyan.bobastraw.internal.EncodedCommand binaryCommand) {
             this.slot = slot;
             this.command = command;
+            this.binaryCommand = binaryCommand;
         }
 
         private void send(Node target, int redirects) {
@@ -525,7 +671,9 @@ public final class BobaStrawClusterClient implements AutoCloseable {
                     if (terminal) {
                         return;
                     }
-                    stage = target.client.executeAsync(command[0], tail(command));
+                    stage = binaryCommand != null ? target.client.executeEncodedCommand(binaryCommand)
+                        : transportCompletion ? target.client.executeTransport(command[0], tail(command))
+                        : target.client.executeAsync(command[0], tail(command));
                     pending = stage.toCompletableFuture();
                 }
             } catch (RuntimeException error) {
@@ -576,7 +724,7 @@ public final class BobaStrawClusterClient implements AutoCloseable {
                         destination = node(endpoint);
                         Node[] replacement = slots.clone();
                         replacement[slot.intValue()] = destination;
-                        slots = replacement;
+                        replaceSlots(replacement);
                         topologyVersion++;
                     }
                 }
@@ -609,7 +757,8 @@ public final class BobaStrawClusterClient implements AutoCloseable {
                         }
                     });
                 }
-                stage = asking.executeStateful(new String[] {"ASKING"});
+                stage = transportCompletion ? asking.executeTransport(new String[] {"ASKING"})
+                    : asking.executeStateful(new String[] {"ASKING"});
                 pending = stage.toCompletableFuture();
             }
             stage.whenComplete((value, error) -> {
@@ -626,7 +775,8 @@ public final class BobaStrawClusterClient implements AutoCloseable {
                         if (!"OK".equals(value.asString())) {
                             throw new BobaStrawProtocolException("ASKING did not return OK");
                         }
-                        response = asking.executeDedicated(command, false);
+                        response = binaryCommand == null ? asking.executeDedicated(command, transportCompletion)
+                            : asking.executeEncodedCommand(binaryCommand);
                         pending = response.toCompletableFuture();
                     }
                     response.whenComplete(this::finish);

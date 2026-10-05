@@ -209,7 +209,7 @@ class BobaStrawConnectionLifecycleTest {
     }
 
     private static final class HoldingPingServer implements AutoCloseable {
-        private final ServerSocket serverSocket = new ServerSocket(0);
+        private final ServerSocket serverSocket = LoopbackTestServer.open();
         private final CountDownLatch[] commands;
         private final CountDownLatch[] replies;
         private final CountDownLatch complete = new CountDownLatch(1);
@@ -280,7 +280,7 @@ class BobaStrawConnectionLifecycleTest {
     }
 
     private static final class NoCommandServer implements AutoCloseable {
-        private final ServerSocket serverSocket = new ServerSocket(0);
+        private final ServerSocket serverSocket = LoopbackTestServer.open();
         private final CountDownLatch command = new CountDownLatch(1);
         private final CountDownLatch complete = new CountDownLatch(1);
         private final AtomicReference<Throwable> failure = new AtomicReference<Throwable>();
@@ -331,7 +331,7 @@ class BobaStrawConnectionLifecycleTest {
     }
 
     private static final class HelloFlakyServer implements AutoCloseable {
-        private final ServerSocket serverSocket = new ServerSocket(0);
+        private final ServerSocket serverSocket = LoopbackTestServer.open();
         private final int failuresBeforeReady;
         private final long[] acceptedAtNanos;
         private final CountDownLatch readyConnection = new CountDownLatch(1);

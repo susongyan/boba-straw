@@ -23,10 +23,23 @@ public final class BobaStrawTransaction implements AutoCloseable {
     private Operation<?> operation;
     private CompletableFuture<?> source;
     private final Object resultOwner = new Object();
+    private java.util.function.BooleanSupplier topologyCurrent = () -> true;
+    private java.util.function.Consumer<String[]> topologyKeys = command -> { };
+    private BobaStrawScripts scripts;
 
     BobaStrawTransaction(BobaStrawClient client, NioConnection connection) {
         this.client = client;
         this.connection = connection;
+        this.scripts = client.scripts();
+    }
+
+    BobaStrawTransaction bindTopology(java.util.function.BooleanSupplier current,
+                                     java.util.function.Consumer<String[]> keys,
+                                     BobaStrawScripts registry) {
+        topologyCurrent = current;
+        topologyKeys = keys;
+        scripts = registry;
+        return this;
     }
 
     public synchronized BobaStrawTransaction command(String name, String... arguments) {
@@ -43,6 +56,7 @@ public final class BobaStrawTransaction implements AutoCloseable {
             }
             command[index + 1] = arguments[index];
         }
+        topologyKeys.accept(command);
         commands.add(command);
         return this;
     }
@@ -59,6 +73,7 @@ public final class BobaStrawTransaction implements AutoCloseable {
         String[] command = new String[keys.length + 1];
         command[0] = "WATCH";
         System.arraycopy(keys, 0, command, 1, keys.length);
+        topologyKeys.accept(command);
         return start(() -> connection.executeStateful(command), false,
             BobaStrawTransaction::ok);
     }
@@ -78,7 +93,7 @@ public final class BobaStrawTransaction implements AutoCloseable {
     }
 
     public BobaStrawBatchCommands typed() {
-        return new BobaStrawBatchCommands(this::enqueue, client.scripts());
+        return new BobaStrawBatchCommands(this::enqueue, scripts);
     }
 
     private synchronized <T> BobaStrawCommandHandle<T> enqueue(TypedCommand<T> command) {
@@ -212,6 +227,11 @@ public final class BobaStrawTransaction implements AutoCloseable {
         }
         if (operation != null) {
             throw new IllegalStateException("Await the current transaction operation first");
+        }
+        if (!topologyCurrent.getAsBoolean()) {
+            finished = true;
+            client.releaseTransaction(connection, false);
+            throw new BobaStrawCommandNotSentException("Transaction topology binding is no longer current", null);
         }
     }
 

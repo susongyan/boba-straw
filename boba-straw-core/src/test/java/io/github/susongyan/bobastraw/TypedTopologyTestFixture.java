@@ -55,8 +55,9 @@ final class TypedTopologyTestFixture {
             ExecutionException wrongType = assertThrows(ExecutionException.class, () -> await(c.hlen(k)));
             assertTrue(wrongType.getCause() instanceof BobaStrawServerException);
             assertEquals("2", await(c.get(k)), "Mapping/error handling must not shift the next response");
-            assertThrows(UnsupportedOperationException.class, () -> c.blpop(1, l));
-            assertThrows(UnsupportedOperationException.class, () -> c.brpop(1, l));
+            await(c.rpush(l, "right"));
+            assertEquals(Arrays.asList(l, "b"), await(c.blpop(1, l)));
+            assertEquals(Arrays.asList(l, "right"), await(c.brpop(1, l)));
         } finally {
             await(c.del(k, h, l, s, z, missing));
         }

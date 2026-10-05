@@ -13,21 +13,28 @@ import java.util.concurrent.CompletionStage;
 
 /**
  * Standard Java 8 asynchronous String command API; no reactive-library dependency.
- * Cluster and Sentinel support ordinary commands only; blocking methods reject locally.
+ * BLPOP/BRPOP use dedicated connections; Cluster keys must share a slot.
  * Cluster no-key operations address one primary, not the entire cluster.
  */
 public final class BobaStrawAsyncCommands {
     private final CommandExecutor executor;
-    private final BobaStrawClient blockingClient;
+    private final java.util.function.Function<String[], CompletionStage<RespValue>> blocking;
 
     BobaStrawAsyncCommands(BobaStrawClient client) {
         this.executor = client::executeAsync;
-        this.blockingClient = client;
+        this.blocking = command -> client.executeBlocking(command, false);
     }
 
     BobaStrawAsyncCommands(CommandExecutor executor) {
+        this(executor, command -> {
+            throw new UnsupportedOperationException("No dedicated blocking executor");
+        });
+    }
+
+    BobaStrawAsyncCommands(CommandExecutor executor,
+                          java.util.function.Function<String[], CompletionStage<RespValue>> blocking) {
         this.executor = executor;
-        this.blockingClient = null;
+        this.blocking = blocking;
     }
 
     public CompletionStage<Long> bitCount(String key) {
@@ -109,7 +116,7 @@ public final class BobaStrawAsyncCommands {
     /** Returns [key, value], or an empty list on server timeout. Client commandTimeout still applies. */
     public CompletionStage<List<String>> blpop(long timeoutSeconds, String... keys) {
         return BobaStrawStages.map(
-            blockingClient().executeBlocking(blockingPopArguments("BLPOP", timeoutSeconds, keys), false),
+            blocking.apply(blockingPopArguments("BLPOP", timeoutSeconds, keys)),
             BobaStrawAsyncCommands::stringList
         );
     }
@@ -117,7 +124,7 @@ public final class BobaStrawAsyncCommands {
     /** Like blpop, but removes the last element. Uses its own dedicated connection. */
     public CompletionStage<List<String>> brpop(long timeoutSeconds, String... keys) {
         return BobaStrawStages.map(
-            blockingClient().executeBlocking(blockingPopArguments("BRPOP", timeoutSeconds, keys), false),
+            blocking.apply(blockingPopArguments("BRPOP", timeoutSeconds, keys)),
             BobaStrawAsyncCommands::stringList
         );
     }
@@ -136,13 +143,6 @@ public final class BobaStrawAsyncCommands {
         }
         arguments[arguments.length - 1] = Long.toString(timeoutSeconds);
         return arguments;
-    }
-
-    private BobaStrawClient blockingClient() {
-        if (blockingClient == null) {
-            throw new UnsupportedOperationException("Blocking commands require a Standalone dedicated connection");
-        }
-        return blockingClient;
     }
 
     public CompletionStage<String> get(String key) {

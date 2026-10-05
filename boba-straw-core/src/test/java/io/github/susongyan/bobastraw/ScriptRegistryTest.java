@@ -22,6 +22,17 @@ class ScriptRegistryTest {
     private static final String[] NO_KEYS = new String[0];
 
     @Test
+    void testServerOwnsTheExactClientAddressWithoutPortReuse() throws Exception {
+        try (ServerSocket server = LoopbackTestServer.open(); ServerSocket collision = new ServerSocket()) {
+            assertEquals("127.0.0.1", server.getInetAddress().getHostAddress());
+            assertFalse(server.getReuseAddress());
+            collision.setReuseAddress(true);
+            assertThrows(IOException.class, () -> collision.bind(
+                new java.net.InetSocketAddress("127.0.0.1", server.getLocalPort())));
+        }
+    }
+
+    @Test
     void cancellationAfterRecoverySubmissionKeepsTheReplyPlaceholder() throws Exception {
         try (Peer peer = new Peer(); BobaStrawClient client = peer.client(2000)) {
             client.scripts().register("one", "return 1", ScriptOutput.integer());
@@ -211,7 +222,16 @@ class ScriptRegistryTest {
 
     @Test
     void binaryInputsAreSnapshotsAndNullSuccessIsCached() throws Exception {
+        int repetitions = Integer.getInteger("boba.straw.scriptSnapshotRepetitions", 1);
+        assertTrue(repetitions > 0 && repetitions <= 1000);
+        for (int iteration = 0; iteration < repetitions; iteration++) {
+            verifyBinarySnapshot();
+        }
+    }
+
+    private void verifyBinarySnapshot() throws Exception {
         try (Peer peer = new Peer(); BobaStrawClient client = peer.client(2000)) {
+            BinaryFailureEvidence evidence = new BinaryFailureEvidence(client);
             byte[] body = "return ARGV[1]".getBytes(StandardCharsets.UTF_8);
             client.scripts().register("binary", body, ScriptOutput.bytes());
             body[0] = 0;
@@ -221,7 +241,7 @@ class ScriptRegistryTest {
                 new byte[][] {key}, value).toCompletableFuture();
             key[0] = 0;
             value[0] = 0;
-            Request request = peer.next("EVAL");
+            Request request = peer.next("EVAL", result, client, evidence);
             assertEquals("return ARGV[1]", request.text(1));
             assertArrayEquals(new byte[] {(byte) 0xff, 0}, request.bytes(3));
             assertArrayEquals(new byte[] {(byte) 0xfe, 0}, request.bytes(4));
@@ -410,11 +430,14 @@ class ScriptRegistryTest {
     }
 
     private static final class Peer implements AutoCloseable {
-        final ServerSocket listener = new ServerSocket(0);
+        final ServerSocket listener = LoopbackTestServer.open();
         final BlockingQueue<Request> requests = new LinkedBlockingQueue<Request>();
         final List<Socket> sockets = new CopyOnWriteArrayList<Socket>();
         final List<Thread> workers = new CopyOnWriteArrayList<Thread>();
         final Thread acceptor;
+        final java.util.concurrent.atomic.AtomicLong bytesRead = new java.util.concurrent.atomic.AtomicLong();
+        final java.util.concurrent.atomic.AtomicReference<Throwable> readFailure =
+            new java.util.concurrent.atomic.AtomicReference<Throwable>();
         volatile boolean closed;
 
         Peer() throws IOException {
@@ -449,12 +472,55 @@ class ScriptRegistryTest {
             return result;
         }
 
+        Request next(String command, CompletableFuture<?> future, BobaStrawClient client,
+                     BinaryFailureEvidence evidence)
+            throws InterruptedException {
+            Request request = requests.poll(3, TimeUnit.SECONDS);
+            if (request == null) {
+                BobaStrawClientMetrics metrics = client.metrics();
+                String state = "pending";
+                if (future.isDone()) {
+                    try {
+                        state = "completed: " + future.join();
+                    } catch (RuntimeException error) {
+                        java.io.StringWriter trace = new java.io.StringWriter();
+                        error.printStackTrace(new java.io.PrintWriter(trace));
+                        state = trace.toString();
+                    }
+                }
+                fail("Expected " + command + "; result=" + state + "; connection="
+                    + metrics.sharedConnectionState() + "; accepted=" + sockets.size()
+                    + "; peerBytes=" + bytesRead.get() + "; written=" + metrics.socketBytesWritten()
+                    + "; queued=" + metrics.queuedWriteBytes() + "; inFlight=" + metrics.inFlightCommands()
+                    + "; peerFailure=" + readFailure.get() + "; listen=" + listener.getLocalSocketAddress()
+                    + "; acceptor=" + acceptor.getState() + "; socket=" + socketAddresses(client)
+                    + "; wire=" + evidence.snapshot());
+            }
+            assertEquals(command, request.text(0));
+            return request;
+        }
+
+        private String socketAddresses(BobaStrawClient client) {
+            try {
+                java.lang.reflect.Field current = BobaStrawClient.class.getDeclaredField("connection");
+                current.setAccessible(true);
+                Object connection = current.get(client);
+                java.lang.reflect.Field field = connection.getClass().getDeclaredField("channel");
+                field.setAccessible(true);
+                java.nio.channels.SocketChannel channel = (java.nio.channels.SocketChannel) field.get(connection);
+                return channel == null ? "closed" : channel.getLocalAddress() + " -> " + channel.getRemoteAddress();
+            } catch (Exception unavailable) {
+                return unavailable.toString();
+            }
+        }
+
         void read(Socket socket) {
             RespCodec.Decoder decoder = new RespCodec.Decoder();
             byte[] buffer = new byte[4096];
             try {
                 int length;
                 while ((length = socket.getInputStream().read(buffer)) >= 0) {
+                    bytesRead.addAndGet(length);
                     decoder.feed(buffer, length);
                     RespValue value;
                     while ((value = decoder.poll()) != null) {
@@ -463,6 +529,9 @@ class ScriptRegistryTest {
                 }
             } catch (IOException ignored) {
                 // Tests deliberately close connected sockets to inject ambiguous failures.
+            } catch (RuntimeException error) {
+                readFailure.compareAndSet(null, error);
+                throw error;
             }
         }
 

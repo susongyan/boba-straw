@@ -2,7 +2,7 @@
 
 当前工作树提供 EVAL、SCRIPT LOAD、EVALSHA 的直接方法与 ScriptOutput 显式结果类型。
 L2 增加 Client-owned `scripts()` 注册执行器；支持三种拓扑的 String 异步调用，
-Standalone 另支持 `executeBinary`。完整机制见[设计稿](../architecture/lua-scripting.md)，阶段与验证分别见[实施进度](../implementation/lua-scripting-progress.md)和[测试记录](../testing/lua-scripting-validation.md)。
+三种拓扑均支持 `executeBinary`。完整机制见[设计稿](../architecture/lua-scripting.md)，阶段与验证分别见[实施进度](../implementation/lua-scripting-progress.md)和[测试记录](../testing/lua-scripting-validation.md)。
 
 ## 推荐：注册一次，按名称执行
 
@@ -27,7 +27,7 @@ execute 的 output 必须与注册时结构相同，例如 list(integer) 不等�
 
 关闭 Client 清理注册信息并取消在途操作；取消不保证 Redis 未执行。
 
-Standalone 二进制调用（String 或 byte[] 注册的正文均保存精确字节）：
+三种拓扑的二进制调用（String 或 byte[] 注册的正文均保存精确字节）：
 
 ```java
 client.scripts().register("echo", "return ARGV[1]", ScriptOutput.bytes());
@@ -35,7 +35,7 @@ CompletionStage<byte[]> echoed = client.scripts().executeBinary(
     "echo", ScriptOutput.bytes(), new byte[0][], new byte[] {(byte) 0xff, 0});
 ```
 
-Cluster/Sentinel 的 executeBinary 当前明确拒绝，拓扑 binary 仍留 C6。
+Cluster 的 executeBinary 按原始 Key 字节路由，多 Key 必须同 Slot。
 注册执行器只提供 CompletionStage；批量调用使用下文的 typed Pipeline/事务入口，不提供自动预热。
 显式直接 SCRIPT LOAD 不更新注册执行器提示，故随后首次按名称执行仍保守使用 EVAL。
 Cluster 无 Key 只选一个主节点；跨 Slot 在脚本发送前失败，ASK 使用独占临时连接。
@@ -102,7 +102,7 @@ ScriptOutput 提供 raw/integer/string/bytes/list；list 支持嵌套，类型�
 不能据此重试（脚本可能已修改数据）。Null、空字符串、空数组分别保留。
 bytes 返回副本；raw 保留 RESP 原始结构，不承诺 payload 深度不可变。
 
-二进制只提供 Standalone 异步入口：
+二进制提供三种拓扑的异步入口：
 
 ```java
 byte[] payload = {(byte) 0xff, 0};
@@ -117,7 +117,7 @@ CompletionStage<byte[]> echoed = client.binary().eval(
 
 ## Pipeline 与事务中的脚本
 
-Standalone 的 `pipeline.typed()` 和 `transaction.typed()` 均提供
+三种拓扑的 `pipeline.typed()` 和 `transaction.typed()` 均提供
 `eval`、`evalSha`、`scriptLoad` 和按注册名称调用的 `script`，返回批次结果句柄。
 
 ```java
@@ -144,6 +144,10 @@ try (BobaStrawTransaction tx = client.transaction()) {
 `script` 在入队时校验名称与 output 并捕获正文及参数，始终入队 EVAL；
 不使用或更新注册执行器的缓存提示，不占其逻辑在途额度，仍受批量连接准入约束。
 本阶段只支持 String 批量：byte[] 注册正文必须是合法 UTF-8，否则在入队前拒绝，不有损转码。
+Cluster Pipeline 整批 Key 必须同 Slot；批内 MOVED/ASK 作为错误返回并触发后续拓扑刷新，
+不拆分或重放批次。Sentinel Pipeline 在提交时绑定一个已验证主节点，切换不迁移在途批次。
+Cluster 事务从 `cluster.transaction(routingKey)` 创建，所有脚本 Key 必须匹配该 Slot；
+Sentinel 使用 `sentinel.transaction()`。两者的旧租约在拓扑切换后失效，不在新节点重放 EXEC。
 
 显式 `evalSha` 不恢复 NOSCRIPT；`result.get(handle)` 仅为对应项抛出服务端错误，
 不会补发请求，其他项仍可读取。`scriptLoad` 的 SHA 只能在批次完成后读取，
@@ -155,7 +159,7 @@ WATCH 冲突通过 `isAborted()` 表示，不等于成功空结果，也不承�
 
 ## 拓扑与失败边界
 
-- Cluster/Sentinel 的 `async()` 提供上述 String 方法；没有同步或 binary facade。
+- 三种拓扑均提供 `async()`、`sync()` 的直接 String 脚本方法及 `binary()`。
 - 声明全部 Key，Cluster 多 Key 必须同 Slot；脚本不得在 ARGV 中藏 Key 或动态生成未声明 Key。
 - Cluster `async().scriptLoad(script)` 仅加载到一个选定主节点，不广播。
   `cluster.scriptLoadForKey(routingKey, script)` 加载到当前 Slot 主节点；routingKey 不发送给 Redis。
@@ -163,6 +167,6 @@ WATCH 冲突通过 `isAborted()` 表示，不等于成功空结果，也不承�
 - 直接命令只走现有普通执行内核；Cluster 仍保留有界 MOVED/ASK，不自动重放网络失败。
 - 取消/超时不是服务端撤销；脚本原子执行不等于运行错误时回滚。
 - SCRIPT DEBUG 会改变连接行为，普通 Raw、Pipeline、事务 command 入口本地拒绝。
-- typed Pipeline/事务脚本目前仅 Standalone String；不要自行循环普通 async 调用来冒充批量执行。
+- typed Pipeline/事务脚本支持三种拓扑 String；不要循环普通 async 调用冒充批量执行。
 
 只读脚本也走主节点，不引入读写分离。验证记录见[Lua 测试记录](../testing/lua-scripting-validation.md)。

@@ -1,12 +1,14 @@
 # Lua 脚本实施进度
 
-更新日期：2026-10-05。当前实现基线为 `3ad5fef` 加 L3 未提交工作树。
+更新日期：2026-10-06。L3 已提交为 `bcde420`；C6 工作树补齐 L4 拓扑组合并通过 JDK 8/21 full 各 200 项验收。
 设计约束见[Lua 设计](../architecture/lua-scripting.md)，验证结果及历史失败见[测试记录](../testing/lua-scripting-validation.md)，业务接入见[使用指南](../usage/lua.md)。
 本文维护阶段进度与实现差异，不重复维护测试日志。
 
 ## 阶段计划
 
-当前 L1/L2/L3 已实现并通过各自限定范围的专项与矩阵验证；L4 尚未实施。
+当前 L1/L2/L3 已实现并通过各自限定范围的专项与矩阵验证；
+L4 随 C6 补齐 Cluster/Sentinel binary、String sync 与 String Pipeline/事务；
+本批最终验收记录以[核心收尾计划](core-completion-plan.md)为准，binary batch 不在本轮范围。
 后续文档整理的 JDK 21 回归出现等待相关失败及脚本请求未到达断言失败，历史异常仍未定位；
 最新结果见[测试记录](../testing/lua-scripting-validation.md)，不能宣称整个客户端发布验收完成。
 

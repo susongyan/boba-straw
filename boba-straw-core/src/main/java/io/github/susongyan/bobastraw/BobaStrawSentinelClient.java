@@ -42,6 +42,42 @@ public final class BobaStrawSentinelClient implements AutoCloseable {
     private Duration retryDelay;
     private boolean closed;
     private final BobaStrawScripts scripts;
+    private BobaStrawClient dedicatedClient;
+
+    /** Lazy dedicated-connection owner for the current verified primary generation. */
+    private BobaStrawClient dedicatedClient() {
+        synchronized (lock) {
+            ensureOpen();
+            if (master == null || !master.isOpen()) {
+                throw new BobaStrawCommandNotSentException("Sentinel primary is unavailable", null);
+            }
+            if (dedicatedClient == null) {
+                dedicatedClient = BobaStrawClient.builder().resources(resources)
+                    .endpoint(masterEndpoint.host, masterEndpoint.port).credentials(username, password)
+                    .protocol(protocol).commandTimeout(commandTimeout).respLimits(respLimits)
+                    .connectionLimits(connectionLimits).build();
+            }
+            return dedicatedClient;
+        }
+    }
+
+    private void retireDedicatedClient() {
+        // Caller holds the topology lock; retirement does not await application callbacks.
+        if (dedicatedClient != null) {
+            dedicatedClient.retireForTopologyChange();
+            dedicatedClient = null;
+        }
+    }
+
+    /** Lazy primary-bound transaction pool; a primary change invalidates every old lease. */
+    public BobaStrawTransaction transaction() {
+        BobaStrawClient owner = dedicatedClient();
+        return owner.transaction().bindTopology(() -> {
+            synchronized (lock) {
+                return !closed && dedicatedClient == owner && master != null && master.isOpen();
+            }
+        }, command -> { }, scripts);
+    }
 
     private BobaStrawSentinelClient(Builder builder) {
         ownsResources = builder.resources == null;
@@ -81,7 +117,7 @@ public final class BobaStrawSentinelClient implements AutoCloseable {
                 }
                 return null;
             }
-        }, commandTimeout, false, builder.scriptOptions);
+        }, commandTimeout, true, builder.scriptOptions);
         try {
             // Internal completion: construction never waits for application callback workers.
             discover().toCompletableFuture().join();
@@ -97,11 +133,76 @@ public final class BobaStrawSentinelClient implements AutoCloseable {
 
     /** Typed ordinary String commands against the discovered primary; no implicit command replay. */
     public BobaStrawAsyncCommands async() {
-        return new BobaStrawAsyncCommands(this::executeAsync);
+        return new BobaStrawAsyncCommands(this::executeAsync, command -> executeBlocking(command, false));
+    }
+
+    private CompletionStage<RespValue> executeBlocking(String[] command, boolean transport) {
+        synchronized (lock) {
+            BobaStrawClient owner = dedicatedClient();
+            NioConnection selected = master;
+            CompletionStage<RespValue> result = owner.executeBlocking(command, transport);
+            result.whenComplete((value, error) -> {
+                Throwable failure = error == null ? null : unwrap(error);
+                if (failure instanceof BobaStrawCommandTimeoutException
+                    || failure instanceof BobaStrawCommandMayHaveExecutedException
+                    || failure instanceof BobaStrawServerException
+                        && failure.getMessage().startsWith("READONLY ")) {
+                    invalidate(selected);
+                }
+            });
+            return result;
+        }
+    }
+
+    /** No automatic resubscription: observe subscription termination and subscribe again explicitly. */
+    public BobaStrawPubSub pubSub() {
+        return new BobaStrawPubSub(listener -> {
+            synchronized (lock) {
+                BobaStrawClient owner = dedicatedClient();
+                return new BobaStrawPubSub.Binding(owner, owner.openPubSubConnection(listener));
+            }
+        });
+    }
+
+    /** Binary-safe ordinary commands on the verified primary, without automatic replay. */
+    public BobaStrawBinaryCommands binary() {
+        return BobaStrawBinaryCommands.withExecutor(command ->
+            executeOnPrimary(target -> target.executeEncodedCommand(command)));
+    }
+
+    /** Ordinary String calls wait for transport completion, not application callback workers. */
+    public BobaStrawSyncCommands sync() {
+        return new BobaStrawSyncCommands((command, arguments) -> {
+            validateOrdinary(command, arguments);
+            String[] all = new String[arguments.length + 1];
+            all[0] = command;
+            System.arraycopy(arguments, 0, all, 1, arguments.length);
+            return executeOnPrimary(target -> target.executeTransport(all));
+        }, command -> executeBlocking(command, true));
     }
 
     public BobaStrawScripts scripts() {
         return scripts;
+    }
+
+    /** Batch binds to one verified primary at submission; failures are never replayed. */
+    public BobaStrawPipeline pipeline() {
+        return new BobaStrawPipeline((commands, retainErrors) ->
+            executeOnPrimary(target -> {
+                CompletionStage<java.util.List<RespValue>> result = target.executeBatch(commands, retainErrors);
+                result.whenComplete((values, error) -> {
+                    if (values != null) {
+                        for (RespValue value : values) {
+                            if ((value instanceof RespValue.Error || value instanceof RespValue.BlobError)
+                                && value.asString().startsWith("READONLY ")) {
+                                invalidate(target);
+                                break;
+                            }
+                        }
+                    }
+                });
+                return result;
+            }), scripts);
     }
 
     private BobaStrawScripts.Target scriptTarget() {
@@ -126,21 +227,27 @@ public final class BobaStrawSentinelClient implements AutoCloseable {
     /** Ordinary String commands only. Dedicated/stateful operations need a separate topology API. */
     public CompletionStage<RespValue> executeAsync(String command, String... arguments) {
         validateOrdinary(command, arguments);
+        String[] all = new String[arguments.length + 1];
+        all[0] = command;
+        System.arraycopy(arguments, 0, all, 1, arguments.length);
+        return executeOnPrimary(target -> target.execute(all));
+    }
+
+    private <T> CompletionStage<T> executeOnPrimary(
+        java.util.function.Function<NioConnection, CompletionStage<T>> execute
+    ) {
         NioConnection target;
         synchronized (lock) {
             ensureOpen();
             target = master;
             if (target == null || !target.isOpen()) {
-                CompletableFuture<RespValue> failed = new CompletableFuture<RespValue>();
+                CompletableFuture<T> failed = new CompletableFuture<T>();
                 failed.completeExceptionally(new BobaStrawCommandNotSentException(
                     "Sentinel primary is being discovered; command was not sent", null));
                 return failed;
             }
         }
-        String[] all = new String[arguments.length + 1];
-        all[0] = command;
-        System.arraycopy(arguments, 0, all, 1, arguments.length);
-        CompletionStage<RespValue> result = target.execute(all);
+        CompletionStage<T> result = execute.apply(target);
         result.whenComplete((value, error) -> {
             Throwable failure = unwrap(error);
             if (failure instanceof BobaStrawCommandTimeoutException
@@ -232,6 +339,7 @@ public final class BobaStrawSentinelClient implements AutoCloseable {
     private void invalidate(NioConnection connection) {
         synchronized (lock) {
             if (master == connection) {
+                retireDedicatedClient();
                 master = null;
                 masterEndpoint = null;
                 if (discovery == null) {
@@ -358,6 +466,9 @@ public final class BobaStrawSentinelClient implements AutoCloseable {
                         previous = null;
                     } else {
                         previous = master;
+                        if (previous != checking) {
+                            retireDedicatedClient();
+                        }
                         master = checking;
                         masterEndpoint = endpoint;
                         candidate = null;
@@ -426,6 +537,7 @@ public final class BobaStrawSentinelClient implements AutoCloseable {
                 return;
             }
             closed = true;
+            retireDedicatedClient();
             generation++;
             if (scheduled != null) {
                 scheduled.cancel();

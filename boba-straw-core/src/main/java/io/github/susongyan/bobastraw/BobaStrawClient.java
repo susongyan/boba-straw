@@ -198,7 +198,26 @@ public final class BobaStrawClient implements AutoCloseable {
             closed = true;
             connection.closeForTopologyChange();
         }
+        retireDedicatedForTopologyChange();
         close();
+    }
+
+    /** Does not replace the shared connection; only stateful leases are retired. */
+    void retireDedicatedForTopologyChange() {
+        synchronized (this) {
+            if (transactionPool != null) {
+                transactionPool.closeForTopologyChange();
+                transactionPool = null;
+            }
+        }
+        Set<NioConnection> old = new HashSet<NioConnection>();
+        synchronized (dedicatedConnectionLock) {
+            old.addAll(dedicatedConnections);
+            old.addAll(drainingPubSubConnections);
+        }
+        for (NioConnection dedicated : old) {
+            dedicated.closeForTopologyChange();
+        }
     }
 
     public CompletionStage<RespValue> executeAsync(String command, String... arguments) {
@@ -454,6 +473,10 @@ public final class BobaStrawClient implements AutoCloseable {
         }
     }
 
+    <T> CompletionStage<T> exposeCompletion(CompletionStage<T> source) {
+        return resources.exposeCompletion(source);
+    }
+
     void releaseTransaction(NioConnection transaction, boolean healthy) {
         synchronized (this) {
             if (transactionPool == null) {
@@ -466,7 +489,7 @@ public final class BobaStrawClient implements AutoCloseable {
         }
     }
 
-    <T> T await(CompletionStage<T> result) {
+    static <T> T await(CompletionStage<T> result) {
         try {
             return result.toCompletableFuture().get();
         } catch (InterruptedException error) {

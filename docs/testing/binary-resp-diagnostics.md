@@ -2,7 +2,8 @@
 
 2026-09-28，源码基线 `ee7e81a`。跟踪 Java 8 全量矩阵中一次
 BinaryStringCommandsTest.preservesMissingEmptyDuplicateAndNonUtf8ResultsInBothProtocols
-收到 `Unsupported RESP marker: H` 的错误。本记录不是“已修复”的结论。
+收到 `Unsupported RESP marker: H` 的错误。下面早期记录保留当时结论；
+2026-10-06 已复现并修复一条确定的测试端口冲突路径，见文末，不将所有历史失败笼统归为同因。
 
 ## 原始证据
 
@@ -91,3 +92,39 @@ Lua L1 不改 RespCodec、NioConnection 或 Sentinel 发现内核，此事实不
 如需收包，只针对该合成测试端口做有限采集，不能采集其他应用/生产 Redis 流量。
 获得非法字节来自 wire 或 parser 的证据后，再分别定位网络路径或构造确定性协议回归。
 没有复现证据前不放宽 decoder 校验、修改响应内容或将异常转成成功。
+
+## 2026-10-06：定位测试端口被 HTTP 监听器接收
+
+C6 最终回归中，ScriptRegistryTest.binaryInputsAreSnapshotsAndNullSuccessIsCached 等待 EVAL
+超时。增加合成夹具诊断后复现：Future 的失败链为“可能已执行 → Unsupported RESP marker: H”，
+但模拟服务端 accepted=0、peerBytes=0、readFailure=null。当前共享连接已经重连到 READY，
+因此仅看 metrics 的当前连接字节数不能解释前一条失败连接。
+
+现场对应端点：Java ServerSocket 绑定 `0.0.0.0:58919`，客户端访问 `127.0.0.1:58919`。
+只读进程检查显示该 loopback 端点已有 VS Code `Code Helper (Plugin)` 监听；HEAD 返回 HTTP。
+未关闭、修改或重启该进程。随后在这个已知端口做一次有界、无副作用 RESP PING 复现：
+
+```text
+wildcard=0.0.0.0:58919, reuse=true
+replyFirstLine=HTTP/1.1 400 Bad Request
+wildcardAccepted=false
+exclusiveBindingRejectsCollision=true
+```
+
+这解释了一个具体的 H 来源：本机 wildcard 监听与更具体的 loopback 监听共存，请求实际进入 HTTP
+服务，客户端正确拒绝响应开头的 H。**H 不是 Redis 错误码，也不需要放宽 RESP decoder。**
+证据为 `/private/tmp/boba-c6-script-diagnostic-sOh4DC` 的异常链及端点报告，
+确定性复现代码在 `/private/tmp/boba-wildcard-proof-D5nBJV/WildcardProof.java`，执行输出如上。
+前一轮 `/private/tmp/boba-c6-script-diagnostic-3vZB88` 只记录到未 accept/未收到 EVAL；
+随后增加有限字节快照的 `/private/tmp/boba-c6-script-wire-Kk7ZiP` 1000 轮未复现，不伪造该轮收包证据。
+
+修复仅作用于测试：新增 LoopbackTestServer，创建未绑定 ServerSocket，先关闭 SO_REUSEADDR，
+再显式绑定 `127.0.0.1:0`；全部 21 处随机模拟监听/端口预留统一使用它。
+客户端与服务器访问同一具体地址，避免通配监听把端口冲突隐藏到协议层；实际不可用端口仍失败，
+不重试业务、不跳过测试、不加大超时、不修改生产网络和解析代码。
+新增独占绑定断言；原 Lua 用例可用 `boba.straw.scriptSnapshotRepetitions=1000` 有界重复，
+默认一轮，首个失败立即结束。失败诊断只包含合成数据和本地测试连接，不用于业务实例。
+
+验证结果随 [C6 最终记录](../implementation/core-completion-plan.md)登记。
+历史 Binary/Sentinel 报告没有同样完整的端点证据，不能逐次追认都是 VS Code 冲突；
+其他超时、事务等待异常也不能由此自动关闭。若再次出现，继续保留原断言及物理连接字节取证。

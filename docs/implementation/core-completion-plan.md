@@ -1,6 +1,6 @@
 # 核心客户端后续执行顺序
 
-更新时间：2026-09-29。C1 基线为 `2bd4993`，C2 基线为 `9a227d4`，C3 基线为 `ae3990f`，C4 基线为 `c696ae3`。
+更新时间：2026-10-06。C1 基线为 `2bd4993`，C2 基线为 `9a227d4`，C3 基线为 `ae3990f`，C4 基线为 `c696ae3`。
 TLS 后置，不再与本轮其他网络能力并行推进。
 
 ## 阶段与验收
@@ -11,8 +11,8 @@ TLS 后置，不再与本轮其他网络能力并行推进。
 | C2 | Cluster 连接与拓扑 | 节点退避重连、周期/事件刷新、故障摘除、MOVED/ASK 和多 Key 策略，真实集群故障测试 | 本文限定普通命令范围已完成 |
 | C3 | Sentinel | 多 Sentinel 发现、认证边界、主节点切换、旧连接处理、明确未知执行结果，真实切换验证 | 本文限定普通命令范围已完成 |
 | C4 | 可用环境的 JDK/平台验证 | 记录实际 JDK/OS/服务端矩阵，其他平台由 CI 验证，不将本机通过泛化 | 本机 8/11/17/21 通过；25 与其他平台待验证，入口已落地 |
-| C5 | 高频命令与三层 API | 主要数据结构高频接口、命令元数据、Typed/特殊能力/Raw 边界与协议测试；不追求全命令 | 冻结功能及限定环境回归完成（含 String Scan、typed 批量与 binary/sync 执行统一）；模拟测试 H 根因和正式性能复测待收尾 |
-| C6 | 拓扑功能收尾 | Cluster/Sentinel 与新增命令、专用连接组合验收；不重复宣称 C2/C3 已完成 | 待实施 |
+| C5 | 高频命令与三层 API | 主要数据结构高频接口、命令元数据、Typed/特殊能力/Raw 边界与协议测试；不追求全命令 | 冻结功能完成；测试端口冲突 H 路径已修复，历史异常核对与正式性能复测待收尾 |
+| C6 | 拓扑功能收尾 | Cluster/Sentinel 与新增命令、专用连接组合验收；不重复宣称 C2/C3 已完成 | C6.1–C6.5 限定范围完成；JDK 8/21 full 各 200 项通过 |
 | C7 | TLS | 单独实现 SSLEngine、证书/主机名校验和关闭/重连测试；前置功能验收后开展 | 明确后置 |
 | C8 | Starter 与发布 | Health、Micrometer、多客户端、配置/生命周期，质量门禁和兼容矩阵；许可证确定后才能发布 | 待实施 |
 
@@ -28,6 +28,112 @@ L1 时 JDK 8 的事务等待超时及 Sentinel 模拟协议 H 异常本轮未复
 binary Scan/batch、完整 Stream/Geo/HLL 等未纳入 C5 冻结范围，后续按需排期。
 2026-09-29 确认不规划读写分离或 Replica 读策略；Cluster/Sentinel 普通读写走当前主节点，
 主从切换支持不变。该项不是 C6 或发布验收缺口，见[架构决策](../architecture/decisions.md)。
+
+## C6 执行分组（2026-10-05）
+
+| 子阶段 | 内容 | 验收重点 |
+| --- | --- | --- |
+| C6.1a | Sentinel binary 普通命令及注册脚本 | 原始字节、发现/切换、取消/背压、不重放 |
+| C6.1b | Cluster binary 普通命令及注册脚本 | 原始字节 Key、Hash Tag、同 Slot、MOVED/ASK、失败分类 |
+| C6.2 | 两种拓扑的同步普通 facade | 等待 transport completion，不等待业务 callback worker |
+| C6.3 | 拓扑 Pipeline | 明确节点/Slot、结果顺序、准入和重定向边界；不静默跨 Slot 拆分 |
+| C6.4 | 拓扑事务与阻塞能力 | 专用连接绑定主节点代次，切换即失效，不迁移或重放在途操作 |
+| C6.5 | 拓扑 Pub/Sub | 专用连接、确认/退订/关闭、切换后的可见失败及重新订阅契约 |
+
+本批基线 `bcde420` 加未提交 C6 工作树。六个分组已补齐并完成下述限定环境验收。
+范围为普通 binary、String sync、String Pipeline/事务、String BLPOP/BRPOP、经典 Pub/Sub，
+并完成 Lua L4 的拓扑组合。binary Scan/batch/阻塞/订阅、其他阻塞命令和 sharded Pub/Sub 不在本轮范围。
+本机 Redis 7.4.2 Cluster/Sentinel 是拓扑验证环境，不泛化为其他版本/OS 或生产长稳。
+行为与用法分别维护在 [Cluster](../architecture/cluster-topology.md)、[Sentinel](../architecture/sentinel-topology.md)
+和[能力表](../usage/supported-features.md)，下方保留历史验证过程。
+
+### C6.1b–C6.5 验收映射
+
+| 范围 | 实现选择 | 可执行证据 |
+| --- | --- | --- |
+| Binary | 原始字节 Slot 摘要，不往返 String；复用有界 MOVED/ASK | ClusterLifecycleTest.binaryMovedAndAskReuseRoutingWithoutTextConversion；两种拓扑 IntegrationTest 的 binary 方法 |
+| Sync | 等待 transport，ASKING 也不等待业务 worker | 两种 LifecycleTest 的 callback worker 占用测试 |
+| Pipeline | 一次批量准入/写入；Cluster 整批同 Slot；不重放重定向 | ClusterLifecycleTest.pipelineRejectsCrossSlotBeforeSendingAndDoesNotReplayMoved；两种 IntegrationTest |
+| 事务 | 惰性池；Cluster routingKey/所有 Key 同 Slot；绑定主节点与拓扑代次 | TopologyDedicatedTestFixture 的 WATCH abort/typed Lua；真实切换测试；ClusterLifecycleTest.topologyRetirementPreservesAmbiguousExecAndClosesLease |
+| BLPOP/BRPOP | 单次专用连接；取消关闭；不跟随 MOVED/ASK 重放 | TopologyDedicatedTestFixture；ClusterLifecycleTest.blockingCancellationClosesSocketAndMovedIsNotReplayed；既有 DedicatedConnectionLifecycleTest |
+| Pub/Sub | subscribe/psubscribe 确认与退订；可观察 termination；手工重订阅重新选主 | TopologyDedicatedTestFixture 消息/模式/关闭及取消观察不关闭订阅；Cluster/Sentinel 真实切换测试 |
+
+真实切换为 Sentinel RESP2/AUTO 主动 FAILOVER、Cluster AUTO 计划晋升，原有 Cluster RESP2
+主进程暂停/自动晋升回归保留。Slot owner 变化保守退休全部专用连接，不仅受影响 Slot；
+这不是精准迁移能力，也不提供 Pub/Sub 丢失消息补偿或事务重试。
+事务池默认每内部 Client 8 条、获取等待 1 秒、空闲回收 1 分钟；阻塞默认最多 32 条。
+两种拓扑暂未暴露这些池参数，Standalone 原配置保留；Sentinel 首次专用调用会增加一条管理器共享连接。
+
+公开兼容性：仅新增拓扑入口和 Subscription 的 default termination()，不删除或更改已有 public 签名。
+第三方 Subscription 实现默认不支持 termination；内置实现提供观察。原拓扑 BLPOP/BRPOP 从本地拒绝
+变为真实专用执行，是明确的行为扩展。核心仍 Java 8、零第三方运行时依赖，无新增响应式运行时。
+按开发/命令/审查 Skill 核对资源归属、取消、FIFO 和 Key 路由；没有声称独立 Agent 或跨模型评审。
+
+### C6 后续验证记录（2026-10-05 至 06）
+
+均在隔离源码目录执行根 Maven `clean test`，同时开启 compatibility、cluster、sentinel 三个开关，
+JDK 间串行，不与 IDE 共用 target；命令为 `scripts/run-compatibility-matrix.sh full <JDK8> <JDK21>`。
+平台 macOS x86_64/Colima；Standalone Redis 5.0.14/6.2.14/7.4.2、Valkey 8.1.3，
+拓扑 Redis 7.4.2。两种协议 RESP2/AUTO 的 API 正常路径均覆盖。
+
+- `$TMPDIR/boba-straw-compatibility-DtD3JD`：新增测试误用 ClusterSlot.of(byte[])，编译失败；改为 ofBytes。
+- `$TMPDIR/boba-straw-compatibility-qamzBL`：新增 callback 饥饿测试挂起，线程栈显示 thenAccept
+  注册时前序 Future 已完成，测试主线程进入自身等待。给模拟服务端增加响应 gate，先注册再放行；
+  没有修改客户端超时或将此测试竞态当作历史非法 H 的根因。终止的仅为本次测试进程。
+- `$TMPDIR/boba-straw-compatibility-tdCCZv`：C6.1–C6.3 两种 JDK 各 194 项通过；
+  `$TMPDIR/boba-straw-compatibility-VyiJWf`：增加 Pipeline 失败不重放测试后各 195 项通过，全模块成功。
+- `$TMPDIR/boba-straw-compatibility-el1Epj`：新夹具引用不存在的 async.publish，测试编译失败；
+  改用已有 Raw PUBLISH，Cluster 明确声明零 Key，不借本轮虚构 typed 方法。
+- `$TMPDIR/boba-straw-compatibility-oVaiuW`：两种 JDK 各 197 tests，3 failures/1 error；
+  旧夹具仍要求拓扑阻塞方法“不支持”、用 null Client 构造事务，以及 Cluster PUBLISH 未声明 Key。
+  修正为真实 BLPOP/BRPOP 结果验收、有效 Client 和显式无 Key 路由，保留连接策略拒绝断言。
+  新增真实主从切换的旧事务失效和订阅终止用例已通过。
+- `$TMPDIR/boba-straw-compatibility-MgHXNK`：两种 JDK 各 199 tests，零失败/错误/跳过，全模块成功。
+  随后补事务拓扑代次并发保护和取消 termination 观察不影响订阅的断言，最终运行见下一条。
+- `$TMPDIR/boba-straw-compatibility-RUxy60`：JDK 8 全 199 项通过；JDK 21 为 199 项中一项失败，
+  ScriptRegistryTest.binaryInputsAreSnapshotsAndNullSuccessIsCached 在 3 秒内未收到 EVAL；
+  C6 新用例通过，但全量门禁未通过。与历史 Lua 等待失败相似，不能仅凭相似症状断言同一根因。
+  已保留报告，新增 Future 状态、发送/接收字节与模拟服务端错误诊断，不放宽等待时间。
+- 进一步复现确认：Java wildcard 测试监听与 VS Code HTTP loopback 监听共存，RESP PING
+  进入 HTTP 服务，返回 HTTP 400；非复用、具体 loopback 绑定能拒绝冲突。统一修复测试监听，
+  没有修改生产 decoder。证据与不能泛化的历史范围见[H 诊断](../testing/binary-resp-diagnostics.md)。
+- **最终 `$TMPDIR/boba-straw-compatibility-CuD7SN`：Oracle JDK 8u202 / 21.0.7 各 200 tests，
+  0 failures/errors/skipped，全六模块成功。** core/src 与隔离源码逐文件一致，`git diff --check` 通过。
+  辅助千轮诊断在独立临时目录运行，不并发修改 Cluster/Sentinel 夹具；本次不是性能压测。
+- 修复后的 JDK 21 定向重复证据：`/private/tmp/boba-c6-bound-loopback-8eE5ia`，
+  ScriptRegistryTest + BinaryStringCommandsTest 共 25 tests 通过；脚本场景 1000 轮，
+  原二进制 Null 场景 1000 轮/2000 连接。JDK 8 同一串行任务也通过，报告被后一轮 clean 覆盖，
+  因此另以独立目录补存 JDK 8 证据，不把覆盖后的 JDK 21 XML 当作 JDK 8 报告。
+- 独立 JDK 8 千轮证据 `/private/tmp/boba-c6-bound-loopback-jdk8-pNO25m`：同样 25 tests，
+  零失败/错误/跳过，两项重复参数均为 1000；XML 保留 Java 1.8.0_202 与实际参数。
+
+本轮已关闭被复现的测试端口冲突路径，不追认历史所有 H/等待失败同因；证据目录为本机临时留存，发布仍需归档 CI。
+未验证：本版 JDK 11/17/25、其他 OS/ARM64、其他版本 Cluster/Sentinel、跨主机分区、生产长稳及新性能基线。
+TLS 仍为 C7，Starter/正式发布为 C8，均不在 C6 完成声明内。
+
+### C6.1a 实现与验证记录
+
+- 新增 Sentinel `binary()`，复用既有命令目录、不可变帧和普通准入；
+  String/binary 共用 executeOnPrimary，不改变发现和切换状态机，不新增业务重试。
+- Sentinel 注册脚本开启二进制执行；仍按实际物理连接缓存提示，明确 NOSCRIPT 才恢复一次。
+- SentinelIntegrationTest 验证 RESP2/AUTO 下非 UTF-8 Key/value、Null、空值、Hash、
+  服务端错误后连接可用、直接 LOAD/EVALSHA/EVAL、注册脚本重复执行，以及切换前后 binary GET。
+- SentinelLifecycleTest 验证 binary 写后断连的可能已执行分类、不向新主重放、
+  发现期间明确未发送、已发送取消后仍占连接准入额度。
+- 首轮 `$TMPDIR/boba-straw-compatibility-xlh0PZ` 两种 JDK 各 190 tests / 1 failure：
+  新测试将既有 binary SET 的 byte[] 返回值与 String 比较。已修正测试为字节比较，未改变 API。
+  首轮报告保留，不通过忽略失败或放宽等待修绿。
+- 修正后 full 证据：`$TMPDIR/boba-straw-compatibility-McuOCh`。
+  JDK 8u202 全 190 项通过、无跳过、全模块成功；JDK 21.0.7 为 190 项中 189 通过、1 failure，
+  无跳过。新增 Sentinel 用例通过；失败为既有
+  DedicatedConnectionLifecycleTest.blockingTimeoutAndClientCloseReleaseSocket：
+  Peer.awaitHeld 两秒内未见 BLPOP，请求未到达的根因尚未确定。
+  本批没有修改 Standalone 阻塞路径，不据此推断故障必然与变更无关或仅由环境导致。
+  JDK 21 全量门禁未通过，C6.1a 暂记实现及专项验证完成、回归收尾未关闭。
+- 同一 JDK 21 源码快照定向复测 DedicatedConnectionLifecycleTest、
+  SentinelLifecycleTest、SentinelIntegrationTest：40 项通过、零跳过。
+  最新定向报告在上述 run-2/build 的 surefire-reports；原失败报告保留在
+  run-2/boba-straw-core/surefire-reports 与 maven.log。单次复测通过不关闭根因待办。
 
 ## C1 当前范围
 

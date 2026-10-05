@@ -22,8 +22,8 @@ The client does not automatically retry commands. A timeout or disconnect after 
 普通命令默认使用每个 Redis 节点一个共享的 NIO 多路复用连接，不要求业务配置连接池大小。
 事务使用懒加载有界池；成功 EXEC 或显式放弃时 UNWATCH 确认后归还，取消/失败/未完成 close
 均销毁。池借用不持有 Client 锁，空闲回收使用共享 EventLoop 定时任务。
-Pub/Sub 使用独占连接；Standalone BLPOP/BRPOP 使用有并发上限的按需单次连接，不入池，
-结束或取消即关闭。其他阻塞命令及 Cluster 阻塞入口仍未完成。Cluster 普通命令按节点共享连接。
+Pub/Sub 使用独占连接；三拓扑 String BLPOP/BRPOP 使用有并发上限的按需单次连接，不入池，
+结束或取消即关闭。其他阻塞命令仍未完成。Cluster 普通命令按节点共享连接。
 
 共享连接使用 `BobaStrawConnectionLimits` 做每物理连接的准入保护：默认上限为 4,096 个
 未排空响应的应用命令和 16 MiB 尚未写入 socket 的编码命令帧。这与 Resources 级 callback
@@ -62,9 +62,9 @@ Standalone 使用调用方配置的端点，不因该决定自动发现或校验
 Standalone 已达到基础验收。Cluster 普通主节点命令具有节点退避重连、周期/事件拓扑发现、
 非 seed 旧节点摘除、已知多 Key 同 Slot 校验和单次 MOVED/ASK；ASK 使用单次专用连接，
 不污染共享连接状态和永久 Slot 映射。完整边界见 [cluster-topology.md](cluster-topology.md)。
-这不包含 Cluster 事务/Pipeline/Pub/Sub/阻塞接口，也不等于生产长稳验收。
+C6 增加单 Slot Pipeline/事务、BLPOP/BRPOP 与经典 Pub/Sub；不等于生产长稳验收。
 Sentinel 普通主节点命令通过独立入口实现：重新发现、同连接 ROLE 校验、两套认证与旧连接退休；
-见 [sentinel-topology.md](sentinel-topology.md)。专用组合留待 C6，TLS 仍未实现。
+见 [sentinel-topology.md](sentinel-topology.md)。C6 专用组合绑定主节点代次，失败不迁移/重放；TLS 仍未实现。
 
 ## Command surface
 

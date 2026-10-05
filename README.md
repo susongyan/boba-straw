@@ -155,7 +155,8 @@ BobaStrawClusterClient cluster = BobaStrawClusterClient.builder()
 
 Cluster 普通命令已有节点退避重连、周期/事件拓扑刷新和同 Slot 多 Key 校验。MOVED 最多
 跟随一次，ASK 使用有界单次专用连接，不改变永久 Slot owner；未知命令必须显式声明全部 Key。
-Cluster 的 Pipeline、事务、阻塞和 Pub/Sub 接口仍待完成，详见
+Cluster/Sentinel 已提供 String Pipeline/事务、BLPOP/BRPOP 和经典 Pub/Sub；
+Cluster 批量与事务限同 Slot，专用操作切换后不迁移、不重放，订阅由业务显式恢复。详见
 [Cluster 连接与拓扑](docs/architecture/cluster-topology.md)。
 
 Sentinel 提供独立的 `BobaStrawSentinelClient`：多 Sentinel 发现、两套认证、ROLE 校验、

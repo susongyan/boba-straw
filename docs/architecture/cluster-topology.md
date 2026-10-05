@@ -1,6 +1,7 @@
-# Cluster 普通命令连接与拓扑
+# Cluster 连接、拓扑与专用能力
 
-更新：2026-09-22。属于核心收尾 C2；不表示 Cluster 的事务、Pipeline、Pub/Sub 和阻塞命令已完成。
+更新：2026-10-05。C2 的普通路由基础上，C6 增加 binary、sync、Pipeline、事务、BLPOP/BRPOP 和经典 Pub/Sub。
+实测范围与未验证项见[核心收尾计划](../implementation/core-completion-plan.md)，不等于生产长稳验收。
 
 ## 对外入口
 
@@ -72,8 +73,52 @@ EVAL/EVALSHA 的 numkeys。Hash Tag 与 CRC16 保持一致。扩展命令时必�
 未知模块命令的 Key/状态语义由调用者负责，Raw 不是安全执行任意命令的保证。
 
 拒绝共享入口上的 MULTI/WATCH、订阅、连接状态、已知阻塞命令等；XREAD/XREADGROUP
-暂时整体拒绝，等待专用接口分离 BLOCK 语义。已提供普通 String async typed facade，尚不提供 binary/sync facade、
-Pipeline、事务、阻塞和订阅入口；这些组合留在 C5/C6 验收。
+暂时整体拒绝，等待专用接口分离 BLOCK 语义。普通 String async/sync、binary async 复用相同元数据；
+binary Key 直接按原始字节计算 Slot，不经过 String。同步等待 transport，包括 ASKING，不依赖业务回调线程。
+
+## 专用能力如何绑定拓扑
+
+目标是复用已有批量和专用连接生命周期，不把“切换后可继续访问”误解为“正在执行的操作可以迁移”。
+
+```java
+BobaStrawPipeline batch = cluster.pipeline();
+BobaStrawCommandHandle<String> value = batch.typed().get("{account}:name");
+String name = batch.executeTyped().toCompletableFuture().get().get(value);
+
+try (BobaStrawTransaction tx = cluster.transaction("{account}:balance")) {
+    tx.watch("{account}:balance").toCompletableFuture().get();
+    BobaStrawCommandHandle<Long> count = tx.typed().incr("{account}:counter");
+    BobaStrawBatchResult result = tx.execTyped().toCompletableFuture().get();
+    if (!result.isAborted()) {
+        Long current = result.get(count);
+    }
+}
+cluster.async().blpop(1, "{queue}:jobs");
+```
+
+- Pipeline：提交前校验整批全部已知 Key 同 Slot，绑定一个主节点批量发送；无 Key 批次选择一个主节点。
+  不隐式拆分。批内 MOVED/ASK 保留失败并请求刷新，不能逐条补发而破坏顺序。
+- 事务：必须提供 routingKey；WATCH 和所有命令 Key 必须匹配该 Slot。首次使用才创建事务池，
+  成功 EXEC/确认 UNWATCH 后可复用，取消、异常和未完成 close 销毁。注册脚本使用 Cluster 注册表，
+  批内按名称调用始终入队 EVAL，不做 NOSCRIPT 事后补发。
+- 阻塞：仅 String BLPOP/BRPOP，同 Slot、单次专用连接，完成/取消/失败关闭，不进入事务池。
+  MOVED/ASK 也不重放；后续调用使用刷新的拓扑。Redis timeout=0 不关闭客户端 commandTimeout。
+- Pub/Sub：`cluster.pubSub().subscribe/psubscribe` 是经典全局订阅，不是 SSUBSCRIBE。
+  每次订阅在当前主节点创建专用连接；保留 facade 可以重新订阅，但不会自动恢复旧订阅。
+
+Slot owner 快照有变化时，当前实现保守退休所有节点的事务池和专用连接（包括无关 Slot 的租约），
+不影响普通共享连接。这用较大的中断范围换取明确的状态隔离；相同快照的周期刷新不触发退休。
+事务还检查选定共享连接的物理代次；失效后新操作明确未发送。在途 EXEC 则按实际写出状态保留
+“可能已执行”，不能据此重试。切换感知有刷新延迟，不是服务端 fencing 或全局原子快照。
+
+`BobaStrawSubscription.termination()` 可在订阅成功后立即观察：主动 close 后传输结束正常完成，
+未主动关闭的断连/拓扑退休异常完成。它不是消息回调排空或退订 ACK 保证；取消观察 Future 不取消订阅。
+每次观察占用既有 callback 容量，应保留一次观察，不无限注册。业务决定何时重新订阅，切换期间可能丢消息。
+客户端或外部 Resources 关闭后不再新建观察或订阅。
+
+事务、Pipeline、订阅、阻塞本批仅 String；binary batch/阻塞/订阅和更多阻塞命令不在此范围。
+语义依据：[Cluster spec](https://redis.io/docs/latest/operate/oss_and_stack/reference/cluster-spec/)，
+核实日期 2026-10-05。
 
 保留既有 public 方法签名，新增配置/观测/显式 Key 入口。行为收紧：以前猜测第一参数为 Key
 的未知命令现在必须声明 Key；以前会发送的跨 Slot 和状态命令提前拒绝。

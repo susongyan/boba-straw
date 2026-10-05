@@ -78,13 +78,15 @@ String 异步普通方法统一使用 BobaStrawAsyncCommands 的 typed helper，
 并经 CommandExecutor 执行。该 facade 已由 Standalone/Cluster/Sentinel 共同复用，不再复制
 每个拓扑的方法；必须补同 Slot/跨 Slot、RESP2/AUTO 与拓扑适用性测试。
 命令参数由调用对象持有快照；不要暴露可修改数组。不要用 thenApply 替代保留取消传播的映射。
-阻塞方法继续单独走 Standalone 专用连接；Cluster/Sentinel facade 拒绝，不可用普通 executor 实现。
+BLPOP/BRPOP 在三种拓扑均走专用连接；Cluster 要求同 Slot，不可用普通 executor 实现。
 Standalone binary 普通方法使用 TypedCommand.binary + BinaryCommandExecutor + 共享 decoder，
 参数必须保留原始字节快照；当前直接编码为不可变 EncodedCommand，不做两轮 payload 防御复制。
 只读帧与每请求独立 position/limit 保证所有权；不能用 String 转码来复用文本执行器。
 Standalone 同步普通方法同样构造 TypedCommand，但直接等待 transport 后在调用线程解码。
 Pipeline/事务复用调用对象本地入队，不能因此改为普通 executor 逐条发送。
-拓扑 binary/sync、binary Scan/batch 尚无公开 facade，不能从内部适配抽象推断已经支持。
+三种拓扑已接入普通 binary、String sync 和注册脚本 executeBinary；Pipeline 为 String 批量，
+Cluster 整批同 Slot、不事后恢复 MOVED/ASK。拓扑事务绑定主节点代次，Cluster 显式 routingKey；
+拓扑 BLPOP/BRPOP 和经典 Pub/Sub 复用专用生命周期，不重放/自动重订阅。binary Scan/batch 仍未提供。
 
 不要在各 facade 再维护阻塞/状态命令黑名单。新增特殊能力走独立生命周期，不能将注册表属性改成
 ORDINARY 来绕过限制。注册为 read-only 也不授权自动重试；since 记录基础命令版本，不代表所有选项同版本。

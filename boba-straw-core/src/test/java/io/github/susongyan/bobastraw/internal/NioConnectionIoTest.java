@@ -270,7 +270,7 @@ class NioConnectionIoTest {
     }
 
     private static final class CommandServer implements AutoCloseable {
-        private final ServerSocket serverSocket = new ServerSocket(0);
+        private final ServerSocket serverSocket = io.github.susongyan.bobastraw.LoopbackTestServer.open();
         private final int expectedCommands;
         private final String responses;
         private final boolean holdResponse;

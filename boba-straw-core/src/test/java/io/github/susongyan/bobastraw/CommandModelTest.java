@@ -80,7 +80,7 @@ class CommandModelTest {
 
     @Test
     void rawBinaryPipelineAndTransactionCannotBypassConnectionPolicies() throws Exception {
-        try (ServerSocket server = new ServerSocket(0);
+        try (ServerSocket server = LoopbackTestServer.open();
              BobaStrawClient client = BobaStrawClient.builder().endpoint("127.0.0.1", server.getLocalPort())
                  .protocol(ProtocolVersion.RESP2).build()) {
             for (String command : new String[] {"MULTI", "WATCH", "SUBSCRIBE", "CLIENT", "SELECT", "BLPOP",
@@ -89,7 +89,7 @@ class CommandModelTest {
                 assertThrows(IllegalArgumentException.class, () -> client.executeBinaryAsync(ascii(command)));
                 assertThrows(IllegalArgumentException.class, () -> client.executeTransport(command));
                 assertThrows(IllegalArgumentException.class, () -> client.pipeline().command(command));
-                assertThrows(IllegalArgumentException.class, () -> new BobaStrawTransaction(null, null).command(command));
+                assertThrows(IllegalArgumentException.class, () -> new BobaStrawTransaction(client, null).command(command));
                 assertThrows(IllegalArgumentException.class, () -> ClusterCommandRouting.validate(command, new String[0]));
             }
             assertThrows(IllegalArgumentException.class, () -> client.executeBatch(Arrays.asList(
@@ -100,7 +100,7 @@ class CommandModelTest {
             assertThrows(IllegalArgumentException.class, () -> client.executeTransport("SCRIPT", "DEBUG", "YES"));
             assertThrows(IllegalArgumentException.class, () -> client.pipeline().command("SCRIPT", "DEBUG", "YES"));
             assertThrows(IllegalArgumentException.class,
-                () -> new BobaStrawTransaction(null, null).command("SCRIPT", "DEBUG", "YES"));
+                () -> new BobaStrawTransaction(client, null).command("SCRIPT", "DEBUG", "YES"));
             CompletionStage<RespValue> ping = client.executeAsync("PING");
             server.setSoTimeout(3000);
             try (Socket socket = server.accept()) {

@@ -258,6 +258,15 @@ public final class TransactionConnectionPool implements AutoCloseable {
 
     @Override
     public void close() {
+        close(false);
+    }
+
+    /** Retires the generation without losing the delivery classification of active leases. */
+    public void closeForTopologyChange() {
+        close(true);
+    }
+
+    private void close(boolean topologyChange) {
         NioEventLoopGroup resourcesToClose;
         synchronized (this) {
             closed = true;
@@ -266,7 +275,11 @@ public final class TransactionConnectionPool implements AutoCloseable {
                 created--;
             }
             for (NioConnection connection : active) {
-                connection.close();
+                if (topologyChange) {
+                    connection.closeForTopologyChange();
+                } else {
+                    connection.close();
+                }
                 created--;
             }
             active.clear();

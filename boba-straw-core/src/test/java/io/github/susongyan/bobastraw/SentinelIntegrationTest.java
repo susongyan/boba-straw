@@ -16,12 +16,69 @@ import static org.junit.jupiter.api.Assertions.*;
 @EnabledIfSystemProperty(named = "boba.straw.runSentinel", matches = "true")
 class SentinelIntegrationTest {
     @Test
+    void dedicatedCapabilitiesUseTheVerifiedPrimary() throws Exception {
+        assertTestContainer();
+        for (ProtocolVersion protocol : new ProtocolVersion[] {ProtocolVersion.RESP2, ProtocolVersion.AUTO}) {
+            try (BobaStrawSentinelClient client = builder(protocol).build()) {
+                TopologyDedicatedTestFixture.verify(client.async(), client.sync(), client.scripts(),
+                    client.pubSub(), key -> client.transaction(), false, client::executeAsync);
+            }
+        }
+    }
+
+    @Test
+    void binaryCommandsAndRegisteredScriptsPreserveBytes() throws Exception {
+        assertTestContainer();
+        for (ProtocolVersion protocol : new ProtocolVersion[] {ProtocolVersion.RESP2, ProtocolVersion.AUTO}) {
+            try (BobaStrawSentinelClient client = builder(protocol).build()) {
+                byte[] prefix = ("boba-sentinel-binary:" + UUID.randomUUID()).getBytes(
+                    java.nio.charset.StandardCharsets.UTF_8);
+                byte[] key = java.util.Arrays.copyOf(prefix, prefix.length + 1);
+                key[prefix.length] = (byte) 0xff;
+                byte[] value = {(byte) 0xfe, 0, 1};
+                BobaStrawBinaryCommands b = client.binary();
+                try {
+                    assertNull(TypedTopologyTestFixture.await(b.get(key)));
+                    assertArrayEquals(new byte[] {'O', 'K'}, TypedTopologyTestFixture.await(b.set(key, value)));
+                    assertArrayEquals(value, TypedTopologyTestFixture.await(b.get(key)));
+                    assertTrue(TypedTopologyTestFixture.await(b.exists(key)));
+                    assertThrows(java.util.concurrent.ExecutionException.class,
+                        () -> TypedTopologyTestFixture.await(b.incr(key)));
+                    assertArrayEquals(value, TypedTopologyTestFixture.await(b.get(key)));
+                    TypedTopologyTestFixture.await(b.del(key));
+                    TypedTopologyTestFixture.await(b.hset(key, value, new byte[0]));
+                    assertArrayEquals(new byte[0], TypedTopologyTestFixture.await(b.hget(key, value)));
+                    byte[] script = "return ARGV[1]".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                    String sha = TypedTopologyTestFixture.await(b.scriptLoad(script));
+                    assertArrayEquals(value, TypedTopologyTestFixture.await(
+                        b.evalSha(sha, ScriptOutput.bytes(), new byte[0][], value)));
+                    assertArrayEquals(value, TypedTopologyTestFixture.await(
+                        b.eval(script, ScriptOutput.bytes(), new byte[0][], value)));
+                    client.scripts().register("echo-binary", script, ScriptOutput.bytes());
+                    for (int i = 0; i < 2; i++) {
+                        assertArrayEquals(value, TypedTopologyTestFixture.await(client.scripts()
+                            .executeBinary("echo-binary", ScriptOutput.bytes(), new byte[0][], value)));
+                    }
+                } finally {
+                    TypedTopologyTestFixture.await(b.del(key));
+                }
+            }
+        }
+    }
+
+    @Test
     void luaCommandsUseDiscoveredPrimary() throws Exception {
         assertTestContainer();
         for (ProtocolVersion protocol : new ProtocolVersion[] {ProtocolVersion.RESP2, ProtocolVersion.AUTO}) {
             try (BobaStrawSentinelClient client = builder(protocol).build()) {
                 ScriptCompatibilityTest.verifyAsync(client.async(), (key, script) -> client.async().scriptLoad(script));
                 ScriptCompatibilityTest.verifyRegistered(client.scripts(), client.async());
+                BobaStrawPipeline pipeline = client.pipeline();
+                BobaStrawCommandHandle<Long> one = pipeline.typed().eval(
+                    "return 1", ScriptOutput.integer(), new String[0]);
+                assertEquals(Long.valueOf(1), TypedTopologyTestFixture.await(pipeline.executeTyped()).get(one));
+                assertEquals(Long.valueOf(2), client.sync().eval("return 2",
+                    ScriptOutput.integer(), new String[0]));
             }
         }
     }
@@ -63,13 +120,33 @@ class SentinelIntegrationTest {
                         ScriptOutput.string());
                     try {
                         assertEquals("tea", TypedTopologyTestFixture.await(client.async().get(key)));
+                        assertArrayEquals("tea".getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                            TypedTopologyTestFixture.await(client.binary().get(
+                                key.getBytes(java.nio.charset.StandardCharsets.UTF_8))));
                         assertEquals("tea", TypedTopologyTestFixture.await(client.scripts().execute(
                             "read", ScriptOutput.string(), new String[] {key})));
-                        assertEquals("OK", reply(sentinel.executeAsync("SENTINEL", "FAILOVER", "tea")).asString());
-                        awaitMaster(client, sentinel, replacement);
+                        BobaStrawPubSub pubSub = client.pubSub();
+                        try (BobaStrawTransaction tx = client.transaction();
+                             BobaStrawSubscription subscription = TypedTopologyTestFixture.await(
+                                 pubSub.subscribe(key + ":channel", ignored -> { }))) {
+                            TypedTopologyTestFixture.await(tx.watch(key));
+                            java.util.concurrent.CompletableFuture<Void> ended = subscription.termination().toCompletableFuture();
+                            assertEquals("OK", reply(sentinel.executeAsync("SENTINEL", "FAILOVER", "tea")).asString());
+                            awaitMaster(client, sentinel, replacement);
+                            assertThrows(java.util.concurrent.ExecutionException.class,
+                                () -> ended.get(5, TimeUnit.SECONDS));
+                            assertThrows(BobaStrawCommandNotSentException.class, tx::exec);
+                        }
+                        try (BobaStrawSubscription renewed = TypedTopologyTestFixture.await(
+                            pubSub.subscribe(key + ":channel", ignored -> { }))) {
+                            assertNotNull(renewed);
+                        }
                         assertEquals("tea", TypedTopologyTestFixture.await(client.async().get(key)));
                         assertEquals("OK", TypedTopologyTestFixture.await(client.async().set(key, "new-primary")));
                         assertEquals("new-primary", TypedTopologyTestFixture.await(client.async().get(key)));
+                        assertArrayEquals("new-primary".getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                            TypedTopologyTestFixture.await(client.binary().get(
+                                key.getBytes(java.nio.charset.StandardCharsets.UTF_8))));
                         assertEquals("new-primary", TypedTopologyTestFixture.await(client.scripts().execute(
                             "read", ScriptOutput.string(), new String[] {key})));
                     } finally {

@@ -307,7 +307,7 @@ class BinaryStringCommandsTest {
     }
 
     private static final class Server implements AutoCloseable {
-        private final ServerSocket listener = new ServerSocket(0);
+        private final ServerSocket listener = LoopbackTestServer.open();
         private final CompletableFuture<Void> completed = new CompletableFuture<Void>();
         private volatile Socket connection;
         private final Thread thread;

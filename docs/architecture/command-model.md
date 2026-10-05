@@ -27,8 +27,15 @@ Cluster 未知命令必须显式声明全部 Key；已知命令不能通过显�
 - `TypedCommand<T>`：不可变普通 String/binary 调用，绑定命令名、参数快照与 decoder；复用注册表准入规则。
 - `CommandExecutor`：拓扑无关的异步普通执行入口；结果通过 BobaStrawStages.map 映射并传播取消，
   不自行建连接、排队或重试。Standalone/Cluster/Sentinel 由各自既有 executeAsync 适配。
-- `BinaryCommandExecutor`：原始字节执行适配，仅编码 ASCII 命令名；当前只接入 Standalone，
-  不因存在适配接口而宣称支持拓扑 binary。同步 facade 消费同一 TypedCommand，但仍直接等待 transport。
+- `BinaryCommandExecutor`：原始字节执行适配，仅编码 ASCII 命令名；当前接入三种拓扑，
+  Key 保留原始字节并在 Cluster 校验同 Slot。同步 facade 消费同一 TypedCommand，但仍直接等待 transport。
+
+C6 binary 调用构建时额外保存不可变 Slot/路由错误摘要，不保留或解码整份原始参数。
+跨 Slot 错误仅由 Cluster 适配器拒绝，Standalone/Sentinel 保留多 Key 能力。
+Cluster 仍复用有界 MOVED/ASK；同步普通命令使用 transport completion，ASKING 也不依赖 callback worker。
+C6 的三拓扑 String Pipeline/事务共用批量 typed 目录；事务、BLPOP/BRPOP、经典 Pub/Sub
+保持专用连接，不穿过普通 CommandExecutor。Cluster 批量同 Slot，不事后恢复 MOVED/ASK；
+专用操作绑定当前主节点，拓扑退休不重放。下方各批次记录保留当时的范围，不覆盖上述现状。
 - `CommandRegistry`：单一元数据表和共享入口策略，Cluster 路由、Standalone/Sentinel Raw、Pipeline/事务校验消费它。
 - `ClusterCommandRouting`：消费 Key 规则计算同 Slot，保留拓扑和重定向的原有职责。
 

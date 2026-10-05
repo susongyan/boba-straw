@@ -11,13 +11,21 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 /** Ordered command batch. Commands are written and matched in insertion order. */
 public final class BobaStrawPipeline {
-    private final BobaStrawClient client;
+    private final java.util.function.BiFunction<List<String[]>, Boolean,
+        CompletionStage<List<RespValue>>> executor;
+    private final BobaStrawScripts scripts;
     private final List<String[]> commands = new ArrayList<String[]>();
     private final AtomicBoolean executed = new AtomicBoolean();
     private final Object resultOwner = new Object();
 
     BobaStrawPipeline(BobaStrawClient client) {
-        this.client = client;
+        this(client::executeBatch, client.scripts());
+    }
+
+    BobaStrawPipeline(java.util.function.BiFunction<List<String[]>, Boolean,
+                      CompletionStage<List<RespValue>>> executor, BobaStrawScripts scripts) {
+        this.executor = executor;
+        this.scripts = scripts;
     }
 
     public synchronized BobaStrawPipeline command(String name, String... arguments) {
@@ -33,7 +41,7 @@ public final class BobaStrawPipeline {
     }
 
     public BobaStrawBatchCommands typed() {
-        return new BobaStrawBatchCommands(this::enqueue, client.scripts());
+        return new BobaStrawBatchCommands(this::enqueue, scripts);
     }
 
     private synchronized <T> BobaStrawCommandHandle<T> enqueue(TypedCommand<T> command) {
@@ -45,7 +53,7 @@ public final class BobaStrawPipeline {
     /** Runs once, retaining individual server errors for result.get(handle). */
     public CompletionStage<BobaStrawBatchResult> executeTyped() {
         List<String[]> snapshot = takeCommands();
-        return BobaStrawStages.map(client.executeBatch(snapshot, true),
+        return BobaStrawStages.map(executor.apply(snapshot, true),
             values -> new BobaStrawBatchResult(resultOwner, values, snapshot.size(), false));
     }
 
@@ -57,7 +65,7 @@ public final class BobaStrawPipeline {
     }
 
     public CompletionStage<List<RespValue>> execute() {
-        CompletionStage<List<RespValue>> operation = client.executeBatch(takeCommands());
+        CompletionStage<List<RespValue>> operation = executor.apply(takeCommands(), false);
         CompletableFuture<List<RespValue>> result = new CompletableFuture<List<RespValue>>();
         operation.whenComplete((values, error) -> {
             if (error != null) {

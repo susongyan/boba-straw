@@ -92,7 +92,7 @@ public final class BobaStrawScripts {
         return executeSnapshot(name, output, utf8(keys), utf8(arguments));
     }
 
-    /** Standalone only. Keys and arguments are snapshotted without a UTF-8 round trip. */
+    /** All three topologies. Keys and arguments are snapshotted without a UTF-8 round trip. */
     public <T> CompletionStage<T> executeBinary(String name, ScriptOutput<T> output,
                                                byte[][] keys, byte[]... arguments) {
         if (!binary) {

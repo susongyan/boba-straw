@@ -323,7 +323,7 @@ class BobaStrawProtocolNegotiationTest {
     @Test
     @Tag("fault-injection")
     void connectionFailureBeforeHandshakeReportsThatTheCommandWasNotSent() throws Exception {
-        ServerSocket reservation = new ServerSocket(0);
+        ServerSocket reservation = LoopbackTestServer.open();
         int unavailablePort = reservation.getLocalPort();
         reservation.close();
 
@@ -583,7 +583,7 @@ class BobaStrawProtocolNegotiationTest {
         private volatile Throwable failure;
 
         private FakeRedisServer(SessionHandler handler) throws IOException {
-            this.serverSocket = new ServerSocket(0);
+            this.serverSocket = LoopbackTestServer.open();
             this.handler = handler;
         }
 
@@ -623,7 +623,7 @@ class BobaStrawProtocolNegotiationTest {
     }
 
     private static final class Resp3PubSubServer implements AutoCloseable {
-        private final ServerSocket serverSocket = new ServerSocket(0);
+        private final ServerSocket serverSocket = LoopbackTestServer.open();
         private final boolean acknowledge;
         private final CountDownLatch complete = new CountDownLatch(2);
         private final CountDownLatch subscribeReceived = new CountDownLatch(1);
@@ -737,7 +737,7 @@ class BobaStrawProtocolNegotiationTest {
     }
 
     private static final class Resp3PubSubOverflowServer implements AutoCloseable {
-        private final ServerSocket serverSocket = new ServerSocket(0);
+        private final ServerSocket serverSocket = LoopbackTestServer.open();
         private final CountDownLatch complete = new CountDownLatch(2);
         private final CountDownLatch subscribeReceived = new CountDownLatch(1);
         private final CountDownLatch allowFirstMessage = new CountDownLatch(1);
@@ -844,7 +844,7 @@ class BobaStrawProtocolNegotiationTest {
     }
 
     private static final class Resp3PubSubBarrierServer implements AutoCloseable {
-        private final ServerSocket serverSocket = new ServerSocket(0);
+        private final ServerSocket serverSocket = LoopbackTestServer.open();
         private final CountDownLatch complete = new CountDownLatch(2);
         private final CountDownLatch unsubscribeReceived = new CountDownLatch(1);
         private final CountDownLatch dedicatedClose = new CountDownLatch(1);

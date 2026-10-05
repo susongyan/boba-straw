@@ -9,9 +9,13 @@ import java.util.concurrent.CompletionStage;
 interface BinaryCommandExecutor {
     CompletionStage<RespValue> executeAsync(EncodedCommand command);
 
+    default CompletionStage<RespValue> executeCommand(TypedCommand<?> command) {
+        return executeAsync(command.binaryFrame());
+    }
+
     default <T> CompletionStage<T> execute(TypedCommand<T> command) {
         return BobaStrawStages.map(
-            executeAsync(command.binaryFrame()),
+            executeCommand(command),
             command.decoder()
         );
     }

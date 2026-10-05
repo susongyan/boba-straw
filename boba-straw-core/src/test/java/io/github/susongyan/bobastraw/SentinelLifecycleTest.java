@@ -22,6 +22,74 @@ import static org.junit.jupiter.api.Assertions.*;
 @Tag("fault-injection")
 class SentinelLifecycleTest {
     @Test
+    void syncUsesTransportWhileCallbackWorkerIsOccupied() throws Exception {
+        try (Peer sentinel = new Peer(); Peer data = new Peer()) {
+            sentinel.destination = data.port();
+            try (BobaStrawSentinelClient client = builder(sentinel).build()) {
+                java.util.concurrent.CountDownLatch entered = new java.util.concurrent.CountDownLatch(1);
+                java.util.concurrent.CountDownLatch release = new java.util.concurrent.CountDownLatch(1);
+                data.businessGate = new java.util.concurrent.CountDownLatch(1);
+                java.util.concurrent.CompletionStage<Void> held = client.async().get("warm").thenAccept(value -> {
+                    entered.countDown();
+                    try {
+                        release.await();
+                    } catch (InterruptedException error) {
+                        Thread.currentThread().interrupt();
+                    }
+                });
+                data.businessGate.countDown();
+                assertTrue(entered.await(2, TimeUnit.SECONDS));
+                try {
+                    assertEquals("tea", CompletableFuture.supplyAsync(() -> client.sync().get("sync"))
+                        .get(2, TimeUnit.SECONDS));
+                } finally {
+                    release.countDown();
+                }
+                held.toCompletableFuture().get(2, TimeUnit.SECONDS);
+            }
+        }
+    }
+
+    @Test
+    void binaryDisconnectDoesNotReplayAndDiscoveryGapRejectsNewCommands() throws Exception {
+        try (Peer sentinel = new Peer(); Peer old = new Peer(); Peer replacement = new Peer()) {
+            sentinel.destination = old.port();
+            try (BobaStrawSentinelClient client = builder(sentinel).build()) {
+                sentinel.destination = replacement.port();
+                sentinel.holdDiscovery = true;
+                old.dropBusiness = true;
+                assertTrue(failure(client.binary().set(new byte[] {(byte) 0xff}, new byte[] {1})
+                    .toCompletableFuture()) instanceof BobaStrawCommandMayHaveExecutedException);
+                await(() -> client.connectionState() != BobaStrawConnectionState.READY);
+                assertTrue(failure(client.binary().get(new byte[] {1}).toCompletableFuture())
+                    instanceof BobaStrawCommandNotSentException);
+                sentinel.holdDiscovery = false;
+                await(() -> ("[127.0.0.1]:" + replacement.port()).equals(client.masterAddress()));
+                assertEquals(0, replacement.businessCalls.get());
+                assertArrayEquals("tea".getBytes(StandardCharsets.UTF_8),
+                    client.binary().get(new byte[] {1}).toCompletableFuture().get(2, TimeUnit.SECONDS));
+            }
+        }
+    }
+
+    @Test
+    void binaryCancellationPreservesPhysicalAdmissionUntilReplyDrains() throws Exception {
+        try (Peer sentinel = new Peer(); Peer data = new Peer()) {
+            sentinel.destination = data.port();
+            try (BobaStrawSentinelClient client = builder(sentinel).connectionLimits(
+                BobaStrawConnectionLimits.builder().maxInFlightCommands(1).build()).build()) {
+                data.holdBusiness = true;
+                CompletableFuture<byte[]> first = client.binary().get(new byte[] {1}).toCompletableFuture();
+                await(() -> data.businessCalls.get() == 1);
+                assertTrue(first.cancel(false));
+                assertTrue(failure(client.binary().get(new byte[] {2}).toCompletableFuture())
+                    instanceof BobaStrawBackpressureException);
+                assertEquals(1, data.businessCalls.get());
+            }
+        }
+    }
+
+    @Test
     void scriptOptionsApplyToSentinelRegistry() throws Exception {
         try (Peer sentinel = new Peer(); Peer data = new Peer()) {
             sentinel.destination = data.port();
@@ -281,7 +349,7 @@ class SentinelLifecycleTest {
     }
 
     private static final class Peer implements AutoCloseable {
-        final ServerSocket server = new ServerSocket(0);
+        final ServerSocket server = LoopbackTestServer.open();
         final List<Socket> sockets = new CopyOnWriteArrayList<Socket>();
         final List<Thread> sessions = new CopyOnWriteArrayList<Thread>();
         final AtomicReference<Throwable> error = new AtomicReference<Throwable>();
@@ -295,6 +363,7 @@ class SentinelLifecycleTest {
         volatile String role = "master";
         volatile String password;
         volatile boolean holdBusiness;
+        volatile java.util.concurrent.CountDownLatch businessGate;
         volatile boolean dropBusiness;
         volatile boolean holdRole;
         volatile boolean holdDiscovery;
@@ -360,6 +429,10 @@ class SentinelLifecycleTest {
                             response = "*3\r\n+" + role + "\r\n:0\r\n*0\r\n";
                         } else {
                             businessCalls.incrementAndGet();
+                            java.util.concurrent.CountDownLatch gate = businessGate;
+                            if (gate != null && !gate.await(2, TimeUnit.SECONDS)) {
+                                throw new AssertionError("Business response gate was not released");
+                            }
                             if (dropBusiness) {
                                 return;
                             }

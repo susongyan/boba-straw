@@ -394,7 +394,7 @@ class DedicatedConnectionLifecycleTest {
     }
 
     private static final class Peer implements AutoCloseable {
-        final ServerSocket server = new ServerSocket(0);
+        final ServerSocket server = LoopbackTestServer.open();
         final List<Session> sessions = new CopyOnWriteArrayList<Session>();
         final AtomicReference<Throwable> failure = new AtomicReference<Throwable>();
         final CountDownLatch held = new CountDownLatch(1);

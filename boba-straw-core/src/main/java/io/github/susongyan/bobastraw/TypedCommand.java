@@ -9,6 +9,8 @@ final class TypedCommand<T> {
     private final String[] arguments;
     private final EncodedCommand binaryFrame;
     private final CommandDecoder<T> decoder;
+    private final Integer binarySlot;
+    private final String binaryRoutingError;
 
     TypedCommand(String name, CommandDecoder<T> decoder, String... arguments) {
         this.name = CommandArgs.commandName(name);
@@ -18,6 +20,8 @@ final class TypedCommand<T> {
         }
         this.arguments = arguments.clone();
         this.binaryFrame = null;
+        this.binarySlot = null;
+        this.binaryRoutingError = null;
         this.decoder = decoder;
     }
 
@@ -33,6 +37,21 @@ final class TypedCommand<T> {
         System.arraycopy(arguments, 0, all, 1, arguments.length);
         this.binaryFrame = new EncodedCommand(all);
         this.decoder = decoder;
+        Integer slot = null;
+        String routingError = null;
+        try {
+            CommandSpec spec = CommandRegistry.resolve(this.name, CommandArgs.binary(arguments));
+            if (spec == null) {
+                routingError = "Unknown Cluster key metadata: " + this.name;
+            } else {
+                slot = spec.slot(CommandArgs.binary(arguments));
+            }
+        } catch (IllegalArgumentException error) {
+            // Standalone/Sentinel allow cross-slot calls; reject only in the Cluster adapter.
+            routingError = error.getMessage();
+        }
+        this.binarySlot = slot;
+        this.binaryRoutingError = routingError;
     }
 
     static <T> TypedCommand<T> binary(String name, CommandDecoder<T> decoder, byte[]... arguments) {
@@ -59,5 +78,13 @@ final class TypedCommand<T> {
 
     CommandDecoder<T> decoder() {
         return decoder;
+    }
+
+    Integer binaryClusterSlot() {
+        binaryFrame();
+        if (binaryRoutingError != null) {
+            throw new IllegalArgumentException(binaryRoutingError);
+        }
+        return binarySlot;
     }
 }

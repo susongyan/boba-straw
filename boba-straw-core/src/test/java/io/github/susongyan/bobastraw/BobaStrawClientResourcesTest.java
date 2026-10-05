@@ -267,7 +267,7 @@ class BobaStrawClientResourcesTest {
 
     @Test
     void failedOwnedClusterBootstrapReleasesItsEventLoop() throws Exception {
-        ServerSocket reservation = new ServerSocket(0);
+        ServerSocket reservation = LoopbackTestServer.open();
         int unavailablePort = reservation.getLocalPort();
         reservation.close();
         int threadsBefore = eventLoopThreadCount();
@@ -291,7 +291,7 @@ class BobaStrawClientResourcesTest {
     }
 
     private static final class PingServer implements AutoCloseable {
-        private final ServerSocket serverSocket = new ServerSocket(0);
+        private final ServerSocket serverSocket = LoopbackTestServer.open();
         private final int expectedCommands;
         private final boolean holdFirstReply;
         private final CountDownLatch firstCommand = new CountDownLatch(1);
@@ -361,7 +361,7 @@ class BobaStrawClientResourcesTest {
     }
 
     private static final class DisconnectingServer implements AutoCloseable {
-        private final ServerSocket serverSocket = new ServerSocket(0);
+        private final ServerSocket serverSocket = LoopbackTestServer.open();
         private final CountDownLatch command = new CountDownLatch(1);
         private final CountDownLatch complete = new CountDownLatch(1);
         private final AtomicReference<Throwable> failure = new AtomicReference<Throwable>();
@@ -412,7 +412,7 @@ class BobaStrawClientResourcesTest {
     }
 
     private static final class SlowServer implements AutoCloseable {
-        private final ServerSocket serverSocket = new ServerSocket(0);
+        private final ServerSocket serverSocket = LoopbackTestServer.open();
         private final CountDownLatch command = new CountDownLatch(1);
         private final CountDownLatch complete = new CountDownLatch(1);
         private final AtomicReference<Throwable> failure = new AtomicReference<Throwable>();
