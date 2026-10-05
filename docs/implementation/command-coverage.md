@@ -5,12 +5,15 @@ C5 收敛到主要数据结构的高频 API，不以全量 Redis 命令或冷门
 具体架构、三层边界及退出标准见 [命令模型](../architecture/command-model.md)。
 不承诺覆盖未来版本新增命令或 Redis 模块命令。每批实现和验收分别记录，不使用“完整命令”笼统结论。
 
-## 后续 Lua 工作包 L1（2026-09-29）
+## 后续 Lua 工作包 L1～L3（2026-10-05）
 
 不改写 C5 冻结范围。EVAL 补强、SCRIPT LOAD、EVALSHA 与 ScriptOutput 直接入口已补代码，
 包括 Standalone String sync/async、binary async、Cluster/Sentinel String async 和 Cluster 定向加载。
 直接 EVALSHA 不补载、不恢复 NOSCRIPT；SCRIPT DEBUG 按状态型形式本地拒绝。
-L2 已增加按名称注册、连接提示、首次 EVAL/后续 EVALSHA/单次 NOSCRIPT 恢复；批量脚本留 L3。
+L2 已增加按名称注册、连接提示、首次 EVAL/后续 EVALSHA/单次 NOSCRIPT 恢复。
+L3 新增 Standalone String typed Pipeline/事务的 eval/evalSha/scriptLoad/script，
+返回批次结果句柄；按名称入队始终 EVAL，显式 EVALSHA 错误不补发。
+二进制批量与拓扑组合不在本批范围；最新验收结果见 Lua 测试记录。
 具体 API、测试证据与未关闭回归见 [Lua 测试记录](../testing/lua-scripting-validation.md)，
 调用示例见[使用指南](../usage/lua.md)。L2 最终生产源码 JDK 8/21 full 各 176 tests 通过；
 后补两项 Cluster 路由测试的 unit 结果及未验证边界见[实施记录](../testing/lua-scripting-validation.md)。

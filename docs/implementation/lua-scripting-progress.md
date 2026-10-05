@@ -1,12 +1,12 @@
 # Lua 脚本实施进度
 
-更新日期：2026-09-29。源码基线 `8c1e707` 加未提交工作树；另含 roadmap/主节点路由文档调整。
+更新日期：2026-10-05。当前实现基线为 `3ad5fef` 加 L3 未提交工作树。
 设计约束见[Lua 设计](../architecture/lua-scripting.md)，验证结果及历史失败见[测试记录](../testing/lua-scripting-validation.md)，业务接入见[使用指南](../usage/lua.md)。
 本文维护阶段进度与实现差异，不重复维护测试日志。
 
 ## 阶段计划
 
-当前 L1/L2 已实现并通过实施时的专项与矩阵验证；L3/L4 尚未实施。
+当前 L1/L2/L3 已实现并通过各自限定范围的专项与矩阵验证；L4 尚未实施。
 后续文档整理的 JDK 21 回归出现等待相关失败及脚本请求未到达断言失败，历史异常仍未定位；
 最新结果见[测试记录](../testing/lua-scripting-validation.md)，不能宣称整个客户端发布验收完成。
 
@@ -18,7 +18,7 @@
 | L4 | 随 C6 补拓扑 binary/sync/批量组合 | 对应拓扑前置能力完成后独立验收，不提前宣传 |
 
 L1～L3 是新增常用 Lua 工作包，不改写历史 C5 冻结验收。
-下一步为 L3：批量入队时捕获注册定义并编码 EVAL，不调用逐条注册执行器，不在批次结束后补发。
+L3：批量入队时捕获注册定义及参数，使用现有 String 批量编码 EVAL，不调用逐条注册执行器，不在批次结束后补发。
 L4 依赖 C6 的对应拓扑前置能力。
 
 ## 实施前基线
@@ -60,3 +60,18 @@ Raw 可发送部分形式不代表这些 API 已实现或验收。
   回调排队仍受原 dispatcher 调度影响；不得据此承诺用户 continuation 在 deadline 前获调度。
 - 显式直接 SCRIPT LOAD 暂不更新注册提示，调用后首次注册执行仍 EVAL；这不是自动预热 API。
   L3 批量脚本、L4 拓扑 binary/sync 组合和生产长稳未包含在 L2。
+
+### L3：Standalone String 批量脚本（2026-10-05）
+
+- BobaStrawBatchCommands 新增 eval/evalSha/scriptLoad/script，Pipeline 与事务共享目录。
+- 注册脚本按名称入队捕获定义与参数，始终 EVAL，不读写缓存提示；无额外网络执行器或重试。
+- 非 UTF-8 正文入 String 批量时拒绝；binary 批量仍待后续阶段。
+- 新增 ScriptBatchTest、真实服务 TypedBatchCompatibilityTest 脚本用例、
+  ScriptRegistryTest 批量取消/FIFO 用例；事务取消、超时和 WATCH abort 测试补入 Lua。
+- 首次全量验证因权限审核服务容量不足两次未能启动；恢复后已完成 JDK 8/21
+  full 根目录 clean test，各 187 项、零失败/错误/跳过，所有模块成功。
+  证据 `$TMPDIR/boba-straw-compatibility-O9ExBu`，详细环境与覆盖见测试记录。
+  L3 限定范围验收完成；L4、C6、历史偶发问题根因及发布验收仍未完成。
+- 本轮 JDK 8u202 离线 core `test-compile` 通过；不使用网络的 ScriptBatchTest、
+  TypedBatchResultTest、ScriptOutputTest 共 7 项通过，零失败/跳过。
+  新增公开方法为增量 API，既有公开签名未修改；不替代完整二进制兼容门禁。

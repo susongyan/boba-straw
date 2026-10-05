@@ -1,6 +1,6 @@
 # Lua 脚本测试与验收记录
 
-更新日期：2026-09-29。设计见[Lua 设计](../architecture/lua-scripting.md)，阶段状态见[实施进度](../implementation/lua-scripting-progress.md)。
+更新日期：2026-10-05。设计见[Lua 设计](../architecture/lua-scripting.md)，阶段状态见[实施进度](../implementation/lua-scripting-progress.md)。
 以下为对应源码快照的历史证据，不自动覆盖后续修改；临时目录可能被系统清理。
 各轮结果独立保留；最近一次文档整理附带回归见末尾，不覆盖此前矩阵证据。
 
@@ -15,7 +15,7 @@
 | 重连/重启 | 模拟断连、物理连接重建和旧代次提示隔离 | 专用真实实例重启后的脚本调用 |
 | MOVED/ASK | 模拟 MOVED 与取消；真实 ASK 目标未缓存 | 完整扩容、Slot 重分配、缩容下线全过程及持续流量组合 |
 | 主节点切换 | 真实 Cluster 晋升及 Sentinel 双协议切换前后脚本调用 | 跨主机网络分区与生产长稳 |
-| Pipeline/事务脚本 | L3 设计明确不进行事后恢复 | L3 实现和批量顺序/取消/事务验收 |
+| Pipeline/事务脚本 | L3 Standalone String：真实混排、NOSCRIPT 单项错误、WATCH abort；模拟取消/FIFO/事务租约销毁 | binary 与 Cluster/Sentinel 批量组合 |
 
 上述缺口不因相邻机制或一次矩阵通过而关闭。SCRIPT FLUSH、重启、淘汰压力试验必须使用独立专用实例。
 
@@ -58,6 +58,24 @@
   Cluster 验证定向加载不广播、同 Slot/跨 Slot、ASK 目标 NOSCRIPT 不隐式补载、显式 EVAL 后 EVALSHA 成功。
   但全量 Java 8 门禁未绿，L1 状态为“已实现并通过专项验证，全量回归待收尾”，不宣布完整发布验收。
 - 失败证据与后续追踪见 [协议诊断](../testing/binary-resp-diagnostics.md)。性能、长稳及 L2/L3 不在本批验收内。
+
+## L3 验证记录（2026-10-05）
+
+- 基线 `3ad5fef` 加 L3 工作树；隔离 full 脚本执行根目录 `mvn clean test`，
+  JDK 8u202 / 21.0.7 各 187 tests，0 failures/errors/skipped，所有模块成功。
+  源码、环境与报告保留于 `$TMPDIR/boba-straw-compatibility-O9ExBu`。
+- macOS/Colima，Redis 5.0.14/6.2.14/7.4.2、Valkey 8.1.3；
+  TypedBatchCompatibilityTest 在各版本 RESP2/AUTO 上验证 Raw PING 与
+  注册 EVAL、显式 EVALSHA NOSCRIPT、SCRIPT LOAD、直接 EVAL、Null 混排，
+  覆盖 Pipeline 和事务；WATCH 冲突使用 Lua 写命令且确认未执行。
+- ScriptBatchTest 验证本地入队、名称/output 校验、参数快照、非 UTF-8 拒绝、
+  关闭注册表后已捕获定义仍不变；ScriptRegistryTest 验证批量取消后的迟到回复排空且不补发。
+  DedicatedConnectionLifecycleTest 的 typed EXEC 取消与超时路径包含 Lua，验证租约销毁。
+- 同轮包含现有 Cluster/Sentinel 真实回归，但不因此宣称拓扑支持批量脚本。
+  本轮未修改传输内核、未新增重试策略；公开 API 为增量，既有签名保留。
+- 此前权限审核两次失败时未执行 full；离线 JDK 8 编译和 7 项纯本地测试已通过。
+  完整矩阵随后通过不关闭历史非法 H、等待超时的根因待办。
+  未做 L3 压测、长稳或完整发布兼容门禁；L4 仍待实施。
 
 ## L2 验证记录（2026-09-29）
 

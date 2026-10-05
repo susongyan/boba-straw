@@ -18,6 +18,41 @@ import static org.junit.jupiter.api.Assertions.*;
 @EnabledIfSystemProperty(named = "boba.straw.runCompatibility", matches = "true")
 class TypedBatchCompatibilityTest {
     @Test
+    void luaBatchesKeepErrorsOrderedAndRegisteredScriptsUseEval() throws Exception {
+        matrix(client -> {
+            client.scripts().register("echo", "return ARGV[1]", ScriptOutput.string());
+            BobaStrawPipeline pipeline = client.pipeline().command("PING");
+            verifyScripts(pipeline.typed(), pipeline::executeTyped);
+            try (BobaStrawTransaction tx = client.transaction()) {
+                tx.command("PING");
+                verifyScripts(tx.typed(), tx::execTyped);
+            }
+        });
+    }
+
+    private static void verifyScripts(BobaStrawBatchCommands commands,
+                                       Supplier<CompletionStage<BobaStrawBatchResult>> execute) throws Exception {
+        BobaStrawCommandHandle<String> registered =
+            commands.script("echo", ScriptOutput.string(), new String[0], "茶");
+        BobaStrawCommandHandle<Long> missing = commands.evalSha(
+            "0000000000000000000000000000000000000000", ScriptOutput.integer(), new String[0]);
+        BobaStrawCommandHandle<String> loaded = commands.scriptLoad("return 1");
+        BobaStrawCommandHandle<Long> direct =
+            commands.eval("return 2", ScriptOutput.integer(), new String[0]);
+        BobaStrawCommandHandle<String> absent =
+            commands.eval("return nil", ScriptOutput.string(), new String[0]);
+        BobaStrawBatchResult result = await(execute.get());
+        assertEquals(6, result.replies().size());
+        assertEquals("PONG", result.replies().get(0).asString());
+        assertEquals("茶", result.get(registered));
+        assertTrue(assertThrows(BobaStrawServerException.class,
+            () -> result.get(missing)).getMessage().startsWith("NOSCRIPT"));
+        assertEquals(40, result.get(loaded).length());
+        assertEquals(Long.valueOf(2), result.get(direct));
+        assertNull(result.get(absent));
+    }
+
+    @Test
     void mixedTypedAndRawBatchesRetainPositionErrorsAndTypes() throws Exception {
         matrix(client -> {
             BobaStrawPipeline pipeline = client.pipeline().command("PING");
@@ -47,7 +82,9 @@ class TypedBatchCompatibilityTest {
                 client.sync().set(key, "before");
                 try (BobaStrawTransaction transaction = client.transaction()) {
                     await(transaction.watch(key));
-                    BobaStrawCommandHandle<String> write = transaction.typed().set(key, "wrong");
+                    BobaStrawCommandHandle<String> write = transaction.typed().eval(
+                        "return redis.call('SET', KEYS[1], ARGV[1])",
+                        ScriptOutput.string(), new String[] {key}, "wrong");
                     client.sync().set(key, "changed");
                     BobaStrawBatchResult result = await(transaction.execTyped());
                     assertTrue(result.isAborted());

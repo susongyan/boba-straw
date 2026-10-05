@@ -36,7 +36,7 @@ CompletionStage<byte[]> echoed = client.scripts().executeBinary(
 ```
 
 Cluster/Sentinel 的 executeBinary 当前明确拒绝，拓扑 binary 仍留 C6。
-注册执行器只提供 CompletionStage；不新增同步 facade、批量接口或自动预热。
+注册执行器只提供 CompletionStage；批量调用使用下文的 typed Pipeline/事务入口，不提供自动预热。
 显式直接 SCRIPT LOAD 不更新注册执行器提示，故随后首次按名称执行仍保守使用 EVAL。
 Cluster 无 Key 只选一个主节点；跨 Slot 在脚本发送前失败，ASK 使用独占临时连接。
 一次执行的取消状态与总 commandTimeout 跨 NOSCRIPT/MOVED/ASK 共享，不给每个子请求重置时限。
@@ -115,6 +115,44 @@ CompletionStage<byte[]> echoed = client.binary().eval(
 `binary().scriptLoad(byte[])` 返回 ASCII SHA 字符串，`binary().evalSha(...)` 的 Key/参数保持 byte[]。
 不要用 String 保存任意二进制值，也不要在方法执行期间从其他线程修改输入数组。
 
+## Pipeline 与事务中的脚本
+
+Standalone 的 `pipeline.typed()` 和 `transaction.typed()` 均提供
+`eval`、`evalSha`、`scriptLoad` 和按注册名称调用的 `script`，返回批次结果句柄。
+
+```java
+client.scripts().register("increment-v1",
+    "return redis.call('INCRBY', KEYS[1], ARGV[1])", ScriptOutput.integer());
+BobaStrawPipeline pipeline = client.pipeline();
+BobaStrawCommandHandle<Long> count = pipeline.typed().script(
+    "increment-v1", ScriptOutput.integer(), new String[] {"counter"}, "1");
+BobaStrawCommandHandle<String> value = pipeline.typed().get("counter");
+BobaStrawBatchResult result = pipeline.executeTyped().toCompletableFuture().get();
+Long incremented = result.get(count);
+String current = result.get(value);
+
+try (BobaStrawTransaction tx = client.transaction()) {
+    BobaStrawCommandHandle<Long> changed = tx.typed().script(
+        "increment-v1", ScriptOutput.integer(), new String[] {"counter"}, "1");
+    BobaStrawBatchResult committed = tx.execTyped().toCompletableFuture().get();
+    if (!committed.isAborted()) {
+        Long number = committed.get(changed);
+    }
+}
+```
+
+`script` 在入队时校验名称与 output 并捕获正文及参数，始终入队 EVAL；
+不使用或更新注册执行器的缓存提示，不占其逻辑在途额度，仍受批量连接准入约束。
+本阶段只支持 String 批量：byte[] 注册正文必须是合法 UTF-8，否则在入队前拒绝，不有损转码。
+
+显式 `evalSha` 不恢复 NOSCRIPT；`result.get(handle)` 仅为对应项抛出服务端错误，
+不会补发请求，其他项仍可读取。`scriptLoad` 的 SHA 只能在批次完成后读取，
+不能将结果句柄当作同批后续命令参数。取消作用于整个批次；事务沿用专用租约，
+WATCH 冲突通过 `isAborted()` 表示，不等于成功空结果，也不承诺事务运行错误回滚。
+
+批量选择 EVAL 的依据见 [Redis Lua 的 Pipeline 说明](https://redis.io/docs/latest/develop/programmability/eval-intro/#evalsha-in-the-context-of-pipelining)
+（核实于 2026-10-05）：事后恢复 NOSCRIPT 会改变原批次的执行顺序。
+
 ## 拓扑与失败边界
 
 - Cluster/Sentinel 的 `async()` 提供上述 String 方法；没有同步或 binary facade。
@@ -125,6 +163,6 @@ CompletionStage<byte[]> echoed = client.binary().eval(
 - 直接命令只走现有普通执行内核；Cluster 仍保留有界 MOVED/ASK，不自动重放网络失败。
 - 取消/超时不是服务端撤销；脚本原子执行不等于运行错误时回滚。
 - SCRIPT DEBUG 会改变连接行为，普通 Raw、Pipeline、事务 command 入口本地拒绝。
-- typed Pipeline/事务脚本方法留在 L3；不要自行循环普通 async 调用来冒充批量执行。
+- typed Pipeline/事务脚本目前仅 Standalone String；不要自行循环普通 async 调用来冒充批量执行。
 
 只读脚本也走主节点，不引入读写分离。验证记录见[Lua 测试记录](../testing/lua-scripting-validation.md)。

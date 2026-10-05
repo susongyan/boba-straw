@@ -162,6 +162,9 @@ class DedicatedConnectionLifecycleTest {
         try (Peer peer = new Peer(); BobaStrawClient client = client(peer, 2000)) {
             peer.hold = "EXEC";
             BobaStrawTransaction transaction = client.transaction().command("GET", "key");
+            if (typed) {
+                transaction.typed().eval("return 1", ScriptOutput.integer(), new String[0]);
+            }
             CompletableFuture<?> result = typed ? transaction.execTyped().toCompletableFuture()
                 : transaction.exec().toCompletableFuture();
             Session held = peer.awaitHeld();
@@ -231,6 +234,9 @@ class DedicatedConnectionLifecycleTest {
         try (Peer peer = new Peer(); BobaStrawClient client = client(peer, 250)) {
             peer.hold = "EXEC";
             BobaStrawTransaction transaction = client.transaction();
+            if (typed) {
+                transaction.typed().eval("return 1", ScriptOutput.integer(), new String[0]);
+            }
             CompletableFuture<?> result = typed ? transaction.execTyped().toCompletableFuture()
                 : transaction.exec().toCompletableFuture();
             Session held = peer.awaitHeld();

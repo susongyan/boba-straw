@@ -356,6 +356,28 @@ class ScriptRegistryTest {
         }
     }
 
+    @Test
+    void cancellingScriptPipelineDrainsRepliesWithoutNoscriptRecovery() throws Exception {
+        try (Peer peer = new Peer(); BobaStrawClient client = peer.client(2000)) {
+            client.scripts().register("one", "return 1", ScriptOutput.integer());
+            BobaStrawPipeline batch = client.pipeline();
+            batch.typed().script("one", ScriptOutput.integer(), NO_KEYS);
+            batch.typed().evalSha("0000000000000000000000000000000000000000",
+                ScriptOutput.integer(), NO_KEYS);
+            CompletableFuture<BobaStrawBatchResult> result = batch.executeTyped().toCompletableFuture();
+            Request first = peer.next("EVAL");
+            Request second = peer.next("EVALSHA");
+            assertTrue(result.cancel(false));
+            CompletableFuture<Long> after = call(client);
+            Request third = peer.next("EVAL");
+            first.reply(":99\r\n");
+            second.reply("-NOSCRIPT missing\r\n");
+            third.reply(":3\r\n");
+            assertEquals(Long.valueOf(3), after.get(3, TimeUnit.SECONDS));
+            assertNull(peer.requests.poll(50, TimeUnit.MILLISECONDS));
+        }
+    }
+
     private static CompletableFuture<Long> call(BobaStrawClient client) {
         return client.scripts().execute("one", ScriptOutput.integer(), NO_KEYS).toCompletableFuture();
     }

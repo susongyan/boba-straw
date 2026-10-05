@@ -78,7 +78,7 @@ public final class BobaStrawTransaction implements AutoCloseable {
     }
 
     public BobaStrawBatchCommands typed() {
-        return new BobaStrawBatchCommands(this::enqueue);
+        return new BobaStrawBatchCommands(this::enqueue, client.scripts());
     }
 
     private synchronized <T> BobaStrawCommandHandle<T> enqueue(TypedCommand<T> command) {

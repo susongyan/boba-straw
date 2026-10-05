@@ -101,6 +101,26 @@ public final class BobaStrawScripts {
         return executeSnapshot(name, output, snapshot(keys), snapshot(arguments));
     }
 
+    <T> TypedCommand<T> batchCommand(String name, ScriptOutput<T> output,
+                                    String[] keys, String[] arguments) {
+        final Definition definition;
+        synchronized (this) {
+            ensureOpen();
+            definition = definitions.get(name);
+            if (definition == null || !definition.output.equals(output)) {
+                throw new IllegalArgumentException("Unknown script or mismatched output: " + name);
+            }
+        }
+        final String body;
+        try {
+            body = StandardCharsets.UTF_8.newDecoder()
+                .decode(java.nio.ByteBuffer.wrap(definition.body)).toString();
+        } catch (java.nio.charset.CharacterCodingException error) {
+            throw new IllegalArgumentException("String batches require a UTF-8 script body", error);
+        }
+        return ScriptCommandFactory.text(false, body, output, keys, arguments);
+    }
+
     private <T> CompletionStage<T> executeSnapshot(String name, ScriptOutput<T> output,
                                                   byte[][] keys, byte[][] arguments) {
         final Definition definition;

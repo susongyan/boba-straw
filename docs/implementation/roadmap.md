@@ -2,7 +2,9 @@
 
 本文档记录已实现功能、验证结果和后续工作，是研发与 AI 协作时的进度基线。
 
-更新时间：2026-09-29；最新功能与诊断验收基线为 `8c1e707`。
+更新时间：2026-10-05；最新已提交功能基线为 `3ad5fef`。
+Lua L3 当前为该基线之上的未提交实现，Standalone String 批量限定范围已通过 JDK 8/21 full 验收。
+下文历史诊断与压测记录仍保留各自源码范围，不自动覆盖新代码。
 
 2026-09-22 起的执行顺序及 TLS 后置决定见[核心收尾计划](core-completion-plan.md)。
 
@@ -41,9 +43,13 @@
 各 25 tests 通过。详情见 [C5 收尾审查](c5-exit-review.md) 和
 [Binary RESP 诊断](../testing/binary-resp-diagnostics.md)。
 
-最新 Lua L1 回归：JDK 21 全 163 tests 通过；Java 8 两轮各 163 tests，分别有一项事务等待超时
+历史 Lua L1 回归：JDK 21 全 163 tests 通过；Java 8 两轮各 163 tests，分别有一项事务等待超时
 和一项 Sentinel 模拟 H 异常。新增 Lua 用例通过，但全量 Java 8 门禁未通过；
 证据与源码范围见 [Lua 测试记录](../testing/lua-scripting-validation.md)。
+
+最近已提交脚本容量配置回归：JDK 8/21 各 184 tests，158 通过、26 集成测试跳过；
+不代表历史偶发失败根因已关闭。L3 全量验证在权限审核服务恢复后完成：
+JDK 8/21 各 187 项通过、零跳过，所有模块成功，详见 Lua 测试记录。
 
 ## 已实现功能与验收结果
 
@@ -295,7 +301,7 @@ DedicatedConnectionLifecycleTest / DedicatedConnectionCompatibilityTest，范围
 - [ ] C8：Spring Boot Health、Micrometer、Actuator、多客户端、拓扑/TLS 配置及版本矩阵
 - [ ] 自定义 Codec SPI（已有 String 与 byte[] 高频接口，不等于可插拔序列化 SPI）
 - [ ] binary Scan/batch、更多阻塞命令及选项；按实际需求扩展，不作为 C5 冻结范围缺口
-- [~] 常用 Lua 工作包：L1 直接命令与 L2 注册执行器、连接代次提示及有界 NOSCRIPT 恢复已补代码；L3 批量接口待实施。阶段状态见[实施进度](lua-scripting-progress.md)，L2 验证与历史 Java 8 回归待办见[测试记录](../testing/lua-scripting-validation.md)
+- [~] 常用 Lua 工作包：L1/L2 及容量配置已实现；L3 Standalone String 批量接口已完成限定矩阵验收。L4 拓扑组合未实施。阶段状态见[实施进度](lua-scripting-progress.md)，验证与历史回归待办见[测试记录](../testing/lua-scripting-validation.md)
 - [ ] Stream、Geo、HyperLogLog、更多 Server/ACL typed API：按需排期，不追求全命令
 - [ ] Checkstyle、SpotBugs、ArchUnit、JaCoCo、Revapi/japicmp、Enforcer 门禁
 - [ ] LICENSE、NOTICE、Maven Central 发布元数据
