@@ -81,8 +81,32 @@ boba:
 使用 Starter 时依赖坐标为 `io.github.susongyan:boba-straw-spring-boot-starter:0.1.0-SNAPSHOT`。
 Starter 当前仅自动配置单个 Standalone Client；Sentinel/Cluster 和多客户端自动配置、Health、
 Micrometer 集成尚未提供。核心 SDK 的 Sentinel/Cluster 能力不代表 Starter 已支持配置它们。
-核心 TLS 仍未实现。Boot 3 的自动配置入口存在，但 Boot 版本矩阵与独立示例尚未验收。
+核心已接入 TLS：`rediss://` 使用 JDK 默认信任库；自定义私有 CA/mTLS 需要显式构造
+`BobaStrawTlsOptions` 和 `SSLContext`，当前 Starter 尚无对应配置绑定。
+Boot 3 的自动配置入口存在，但 Boot 版本矩阵与独立示例尚未验收。
 Spring 注入的 Client 由容器关闭，业务方法不应自行 close。
+
+## 核心 TLS 接入
+
+```java
+try (BobaStrawClient client = BobaStrawClient.builder()
+    .uri("rediss://cache.example.internal:6379")
+    .build()) {
+    client.sync().set("tea", "boba");
+}
+```
+
+私有 CA：使用标准 JDK trust manager 构造 `SSLContext`，通过
+`.tls(BobaStrawTlsOptions.builder().sslContext(context).build())` 传入；mTLS 还需 key manager
+提供客户端证书和私钥。不要使用 trust-all manager。默认 TLS 建连/握手预算为 5 秒，命令超时
+仍从提交开始；TLS 校验失败不回退明文，不重放可能已执行的命令。
+
+Cluster 的 `.tls(options)` 同时作用于种子、发现节点和重定向目标。
+Sentinel 的 `.sentinelTls(options)` 保护控制链路，`.tls(options)` 保护数据节点，两者独立配置。
+发现的 IP/主机也必须匹配证书身份；不能仅保证种子的证书正确。
+已验证本机 JSSE、Redis 6.2.14/7.4.2、Valkey 8.1.3 TLS，以及 Redis 7.4.2 TLS Cluster/Sentinel。
+生产长稳与扩展平台矩阵仍未完成；Starter 的 TLS 配置接入留在 C8。
+默认值、失败边界和原理见[网络模型 C7](../architecture/network-model.md#c7-tls-传输设计)。
 
 ## 第一次让 AI 使用
 

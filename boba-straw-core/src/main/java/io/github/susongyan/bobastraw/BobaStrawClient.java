@@ -62,12 +62,14 @@ public final class BobaStrawClient implements AutoCloseable {
     private final BobaStrawScripts scripts;
 
     private BobaStrawClient(Builder builder) {
+        BobaStrawTlsOptions selectedTls = builder.tlsOptions != null ? builder.tlsOptions
+            : (builder.tlsUri ? BobaStrawTlsOptions.defaults() : null);
         this.ownsResources = builder.resources == null;
         this.resources = ownsResources ? BobaStrawClientResources.builder().build() : builder.resources;
         if (!resources.isOpen()) {
             throw new BobaStrawConnectionException("Boba Straw client resources are closed");
         }
-        this.connectionFactory = resources.connectionFactory();
+        this.connectionFactory = resources.connectionFactory().withTls(selectedTls);
         this.commandTimeout = builder.commandTimeout;
         this.respLimits = builder.respLimits;
         this.connectionLimits = builder.connectionLimits;
@@ -546,6 +548,15 @@ public final class BobaStrawClient implements AutoCloseable {
     }
 
     public static final class Builder {
+        private BobaStrawTlsOptions tlsOptions;
+        private boolean tlsUri;
+
+        /** Enables TLS; null uses the URI policy (rediss always remains encrypted). */
+        public Builder tls(BobaStrawTlsOptions value) {
+            tlsOptions = value;
+            return this;
+        }
+
         private String host = "localhost";
         private int port = 6379;
         private Duration commandTimeout = Duration.ofSeconds(2);
@@ -567,10 +578,15 @@ public final class BobaStrawClient implements AutoCloseable {
 
         public Builder uri(String value) {
             URI uri = URI.create(value);
+            if (!"redis".equalsIgnoreCase(uri.getScheme())
+                && !"rediss".equalsIgnoreCase(uri.getScheme())) {
+                throw new IllegalArgumentException("URI scheme must be redis or rediss");
+            }
             if (uri.getHost() == null) {
                 throw new IllegalArgumentException("URI must include a host");
             }
             this.host = uri.getHost();
+            this.tlsUri = "rediss".equalsIgnoreCase(uri.getScheme());
             this.port = uri.getPort() == -1 ? 6379 : uri.getPort();
             if (uri.getUserInfo() != null) {
                 int separator = uri.getUserInfo().indexOf(':');

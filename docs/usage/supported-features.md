@@ -17,7 +17,7 @@
 | Scan typed 页结果 | scan() 特殊入口；异步 String SCAN/HSCAN/SSCAN/ZSCAN、MATCH/COUNT；Cluster 仅单 Key 扫描，不提供全库迭代 | ScanCommandsTest / ScanCompatibilityTest / ClusterIntegrationTest / SentinelIntegrationTest |
 | Cluster | String sync/async、binary async、String Pipeline/事务/BLPOP/BRPOP/经典订阅；多 seed、Slot/Hash Tag、重连/发现、普通命令 MOVED/ASK；拓扑变化退休专用连接，生产长稳未覆盖 | TypedCommandExecutionTest / ClusterSlotTest / ClusterLifecycleTest / opt-in ClusterIntegrationTest；详见核心收尾计划 |
 | Sentinel | String sync/async、binary async、String Pipeline/事务/BLPOP/BRPOP/经典订阅；多 Sentinel、独立认证、ROLE 校验与切换；旧专用连接退休，不重放 | TypedCommandExecutionTest / SentinelLifecycleTest / opt-in SentinelIntegrationTest；详见核心收尾计划 |
-| TLS | 未实现，明确后置 | 无 |
+| TLS | 核心 SSLEngine、rediss/显式 options、证书与端点校验、私有 CA/mTLS；三拓扑与专用连接已验收；生产长稳及扩展平台矩阵后置 | TlsConnectionTest、TlsOptionsTest、TlsTaskCapacityTest、NioTlsFaultTest、TlsCompatibilityTest（真实 Redis/Valkey）；环境与边界见核心收尾计划 |
 | 阻塞命令专用管理 | 三拓扑 String 同步/异步 BLPOP、BRPOP；有界按需单次连接，Cluster 同 Slot；更多阻塞和 binary 阻塞未提供 | DedicatedConnectionLifecycleTest / DedicatedConnectionCompatibilityTest / ClusterLifecycleTest / ClusterIntegrationTest / SentinelIntegrationTest |
 | Spring Boot | 基础单客户端配置；示例工程及 Boot 版本矩阵尚未验收 | 尚无 SpringContextTest，不作示例已验证声明 |
 | Codec SPI / Health / Micrometer / 多客户端自动配置 | 未完成；核心 Client 已有 metrics() 快照，不等于 Starter 的 Micrometer 集成；冷门普通命令保留 Raw 出口 | 不生成虚构 API |

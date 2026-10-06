@@ -1,6 +1,7 @@
 package io.github.susongyan.bobastraw.internal;
 
 import io.github.susongyan.bobastraw.ProtocolVersion;
+import io.github.susongyan.bobastraw.BobaStrawTlsOptions;
 import io.github.susongyan.bobastraw.BobaStrawConnectionLimits;
 import io.github.susongyan.bobastraw.protocol.RespLimits;
 import io.github.susongyan.bobastraw.protocol.RespValue;
@@ -17,6 +18,7 @@ public final class NioConnectionFactory {
 
     private final NioEventLoopGroup eventLoops;
     private final BobaCallbackDispatcher callbackDispatcher;
+    private final BobaStrawTlsOptions tlsOptions;
 
     public NioConnectionFactory(NioEventLoopGroup eventLoops) {
         this(eventLoops, null);
@@ -26,8 +28,19 @@ public final class NioConnectionFactory {
         NioEventLoopGroup eventLoops,
         BobaCallbackDispatcher callbackDispatcher
     ) {
+        this(eventLoops, callbackDispatcher, null);
+    }
+
+    private NioConnectionFactory(NioEventLoopGroup eventLoops,
+        BobaCallbackDispatcher callbackDispatcher, BobaStrawTlsOptions tlsOptions) {
         this.eventLoops = eventLoops;
         this.callbackDispatcher = callbackDispatcher;
+        this.tlsOptions = tlsOptions;
+    }
+
+    /** Returns an immutable per-client security policy sharing the resource owner. */
+    public NioConnectionFactory withTls(BobaStrawTlsOptions options) {
+        return new NioConnectionFactory(eventLoops, callbackDispatcher, options);
     }
 
     public NioConnection create(
@@ -85,7 +98,8 @@ public final class NioConnectionFactory {
     ) {
         return new NioConnection(
             eventLoops.next(), host, port, timeout, requestedProtocol, username, password,
-            clientName, pushListener, idlePingInterval, respLimits, connectionLimits, callbackDispatcher
+            clientName, pushListener, idlePingInterval, respLimits, connectionLimits, callbackDispatcher,
+            tlsOptions, eventLoops.tlsTasks()
         );
     }
 

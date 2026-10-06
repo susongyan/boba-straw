@@ -9,7 +9,8 @@ C6.1～C6.5 已完成 binary、普通同步、String Pipeline/事务、BLPOP/BRP
 验证记录见核心收尾计划。
 下文历史诊断与压测记录仍保留各自源码范围，不自动覆盖新代码。
 
-2026-09-22 起的执行顺序及 TLS 后置决定见[核心收尾计划](core-completion-plan.md)。
+2026-10-06 起先完成 C7 TLS 与 C8 Starter/发布门禁功能，再开展长稳及正式压测；
+执行顺序和历史 TLS 后置决定见[核心收尾计划](core-completion-plan.md)。
 
 状态：
 
@@ -28,7 +29,7 @@ C6.1～C6.5 已完成 binary、普通同步、String Pipeline/事务、BLPOP/BRP
 | C4 兼容矩阵 | 历史本机 JDK 8/11/17/21 通过；最新 C6 全量回归为 8/21 | JDK 25、其他 OS，以及最新版本的扩展矩阵 |
 | C5 高频命令与三层 API | 冻结功能已实现；已定位并修复测试端口冲突导致的 H 路径 | 历史无端点证据的失败仍保留，低负载正式性能复测待做 |
 | C6 拓扑组合 | C6.1–C6.5 限定范围完成；双 JDK full 各 200 项通过 | binary batch/Scan/阻塞/订阅、sharded Pub/Sub 按需另排，不在本次完成范围 |
-| C7 TLS | 未实现，后置 | SSLEngine、证书与主机名校验、关闭和重连验收 |
+| C7 TLS | 限定功能验收完成；JDK 8/21 full-tls 各 230 项通过 | [设计与原理](../architecture/network-model.md#c7-tls-传输设计)；真实 TLS 服务矩阵、拓扑与确定性 I/O 故障证据见核心收尾计划；生产长稳后置 |
 | C8 Starter 与发布 | 基础自动配置已有，生产验收未完成 | 多客户端、拓扑/TLS 配置、Health/Micrometer、质量门禁、许可证及发布 |
 
 ### C5 两项收尾
@@ -299,7 +300,7 @@ DedicatedConnectionLifecycleTest / DedicatedConnectionCompatibilityTest，范围
 
 - [x] C6：限定范围已完成，最终双 JDK full 各 200 项通过；详细范围见上表
 - [ ] 跨主机分区、生产长稳及扩展 JDK/OS 发布矩阵
-- [ ] C7：JDK SSLEngine TLS
+- [x] C7：JDK SSLEngine TLS、真实 TLS 服务矩阵及确定性 I/O 故障验收（限定环境见核心收尾计划）
 - [ ] C8：Spring Boot Health、Micrometer、Actuator、多客户端、拓扑/TLS 配置及版本矩阵
 - [ ] 自定义 Codec SPI（已有 String 与 byte[] 高频接口，不等于可插拔序列化 SPI）
 - [ ] binary Scan/batch、更多阻塞命令及选项；按实际需求扩展，不作为 C5 冻结范围缺口
@@ -338,4 +339,6 @@ Cluster：`mvn -Dboba.straw.runCluster=true test`。
 Sentinel：`mvn -Dboba.straw.runSentinel=true test`。
 
 隔离全模块矩阵：`sh scripts/run-compatibility-matrix.sh full /absolute/jdk8/home /absolute/jdk21/home`。
-full 需要预先启动对应本地容器；默认测试不依赖容器，TLS 测试入口待 C7 实现。
+full 需要预先启动对应本地容器；默认测试不依赖容器。TLS 本机 JSSE 测试已纳入默认测试，
+需要完整 JDK 的 keytool。真实 Redis/Valkey TLS、Cluster/Sentinel 使用 `full-tls` 模式，
+专用容器、临时证书及清理步骤见[核心收尾计划](core-completion-plan.md#复现-tls-容器验收)。

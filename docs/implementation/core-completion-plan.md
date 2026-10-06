@@ -1,7 +1,8 @@
 # 核心客户端后续执行顺序
 
 更新时间：2026-10-06。C1 基线为 `2bd4993`，C2 基线为 `9a227d4`，C3 基线为 `ae3990f`，C4 基线为 `c696ae3`。
-TLS 后置，不再与本轮其他网络能力并行推进。
+此前后置的 TLS 现进入 C7：先完成 C7、C8 功能及必要的安全与生命周期测试，
+再开展长期稳定性和正式性能压测。正式发布仍受许可证选择等发布门禁约束。
 
 ## 阶段与验收
 
@@ -13,8 +14,8 @@ TLS 后置，不再与本轮其他网络能力并行推进。
 | C4 | 可用环境的 JDK/平台验证 | 记录实际 JDK/OS/服务端矩阵，其他平台由 CI 验证，不将本机通过泛化 | 本机 8/11/17/21 通过；25 与其他平台待验证，入口已落地 |
 | C5 | 高频命令与三层 API | 主要数据结构高频接口、命令元数据、Typed/特殊能力/Raw 边界与协议测试；不追求全命令 | 冻结功能完成；测试端口冲突 H 路径已修复，历史异常核对与正式性能复测待收尾 |
 | C6 | 拓扑功能收尾 | Cluster/Sentinel 与新增命令、专用连接组合验收；不重复宣称 C2/C3 已完成 | C6.1–C6.5 限定范围完成；JDK 8/21 full 各 200 项通过 |
-| C7 | TLS | 单独实现 SSLEngine、证书/主机名校验和关闭/重连测试；前置功能验收后开展 | 明确后置 |
-| C8 | Starter 与发布 | Health、Micrometer、多客户端、配置/生命周期，质量门禁和兼容矩阵；许可证确定后才能发布 | 待实施 |
+| C7 | TLS | SSLEngine、证书/主机名校验、拓扑与专用连接配置传播、关闭/重连测试 | 本文限定功能验收完成；JDK 8/21 full-tls 各 230 项通过 |
+| C8 | Starter 与发布 | Health、Micrometer、多客户端、配置/生命周期，质量门禁和兼容矩阵；许可证确定后才能发布 | C7 后实施功能；不执行正式发布 |
 
 用户后续可调整顺序。每阶段只记录真实完成和验证项；不将“网络模型六阶段完成”等同整个客户端完成。
 不自动重试命令，网络断连、取消和超时均不能解释为服务端撤销。
@@ -28,6 +29,91 @@ L1 时 JDK 8 的事务等待超时及 Sentinel 模拟协议 H 异常本轮未复
 binary Scan/batch、完整 Stream/Geo/HLL 等未纳入 C5 冻结范围，后续按需排期。
 2026-09-29 确认不规划读写分离或 Replica 读策略；Cluster/Sentinel 普通读写走当前主节点，
 主从切换支持不变。该项不是 C6 或发布验收缺口，见[架构决策](../architecture/decisions.md)。
+
+## C7 设计与实施入口（2026-10-06）
+
+设计与原理见[网络模型：C7 TLS 传输设计](../architecture/network-model.md#c7-tls-传输设计)。
+该节说明目标、目标 API、默认安全策略、握手时序、EventLoop 所有权、失败语义和拓扑边界。
+其中 API 示例已接入实现；测试范围与未验证项在本节记录，不把设计描述作为验收证据。
+
+- [x] 将设计目标、原理、流程图和验收边界落到架构文档。
+- [x] TLS options、URI 语义、SSLEngine 传输及独立有界握手任务执行器。
+- [x] 握手 deadline、加解密公平预算、缓冲上限、取消与关闭语义的代码实现。
+- [x] Standalone/Cluster/Sentinel 及事务、阻塞、Pub/Sub 的 TLS 配置传播。
+- [x] 下列本机安全负向、密文碎片、重连和资源释放测试；JDK 8/21 与既有明文全量回归。
+- [x] 真实 TLS 服务端矩阵、确定性密文部分写/截断和资源上限故障注入。
+
+长稳和正式压测后置，不意味着跳过上述功能与安全验收。
+
+本机功能测试入口：`TlsConnectionTest`、`TlsOptionsTest`、`internal.TlsTaskCapacityTest`。
+使用本机非复用 loopback 监听，JDK keytool 临时生成证书，不提交私钥或固定测试证书。
+测试运行需要完整 JDK（含 keytool）和本机监听权限。
+
+已补场景：TLS 1.2 与当前 JDK 支持的 TLS 1.3、大 binary 响应、并发与 Pipeline 保序、
+加密 record 碎片代理、私有 CA/错误主机/不受信任/过期证书、mTLS、握手超时、取消与命令超时、
+断连不重放及新连接握手、慢 trust manager 不阻塞其他连接和关闭后迟到任务隔离；
+事务/阻塞/PubSub Push、模拟 Cluster ASK/拓扑刷新与 Sentinel 主节点变化也走真实 TLS 握手。
+任务容量测试覆盖资源级队列有界和关闭，不等同高并发握手压力验收。
+
+首批源码回归（2026-10-06）：`scripts/run-compatibility-matrix.sh full`，JDK 8u202 与
+JDK 21.0.7 **各 219 tests，0 failures / 0 errors / 0 skipped**，六个 Maven 模块成功。
+其中新增 18 项 TLS 相关测试、1 项 Selector 到期等待边界测试；真实 Redis 5/6.2/7.4、
+Valkey 8.1、Cluster/Sentinel 回归仍是既有明文容器，不冒充真实 TLS 服务矩阵。
+证据目录为 `$TMPDIR/boba-straw-compatibility-QChfim`，包含源码快照、环境、日志和测试报告；
+该批运行时源码已核对与快照一致；后续新增验收测试见下表。没有执行长稳压测或发布。
+
+### C7 收尾验收映射
+
+2026-10-06 最终执行 `scripts/run-compatibility-matrix.sh full-tls`：JDK 8u202 与
+JDK 21.0.7 **各 230 tests，0 failures / 0 errors / 0 skipped**，六个 Maven 模块成功。
+证据目录 `$TMPDIR/boba-straw-compatibility-Xfivdq` 保留环境、源码快照和测试报告；
+已核对当前 `boba-straw-core/src` 与该快照一致。C7 在下述范围内完成，不包含 C8 或生产长稳。
+
+| 范围 | 可执行证据与边界 |
+| --- | --- |
+| 真实服务端 | `TlsCompatibilityTest`：Redis 6.2.14、7.4.2、Valkey 8.1.3，RESP2/AUTO，mTLS/认证、binary、Pipeline、事务、阻塞、Pub/Sub、注册脚本 |
+| TLS Cluster | 同一测试类：Redis 7.4.2 三主节点，专用连接、真实 ASK 迁移和 MOVED Slot owner 变化；测试后恢复 Slot，不等同跨主机分区或副本晋升验收 |
+| TLS Sentinel | 同一测试类：Redis 7.4.2 双数据节点、三个 Sentinel；控制和数据链路均加密，真实 FAILOVER、旧事务/订阅退休、新主节点专用能力 |
+| 安全负向 | `TlsConnectionTest` 校验种子之后的发现节点及 ASK 目标不能绕过证书验证；真实拓扑测试分别覆盖 Sentinel 控制/数据链路及 Cluster 缺失客户端身份、错误 Redis 认证 |
+| 部分写与资源上限 | `internal.NioTlsFaultTest`：零写/逐字节写保持密文与消费顺序，写异常不重放，wrap/unwrap/输入缓冲上限，EOF、零进展、任务拒绝 |
+| 密文截断 | `TlsConnectionTest`：真实 JSSE 连接的响应密文被代理截断，待响应命令收到可能已执行异常，而非部分成功 |
+
+确定性 I/O 故障测试使用模拟 SSLEngine/SocketChannel，验证状态机，不将它当作密码学验证；
+加密互通、安全负向和实际 Redis 语义由 JSSE 与真实容器测试补足。生产长稳、跨主机故障、
+正式性能压测和扩展 JDK/OS 矩阵仍后置；Starter 的 TLS 配置接入属于 C8。
+
+### 复现 TLS 容器验收
+
+先启动 Colima/Docker 和原有 `full` 模式需要的明文测试容器，再执行：
+
+```sh
+sh scripts/tls-test-up.sh /absolute/new/test-certificate-directory
+export BOBA_TLS_CERT_DIR=/absolute/new/test-certificate-directory
+sh scripts/run-compatibility-matrix.sh full-tls /absolute/jdk8/home /absolute/jdk21/home
+# 不再需要测试容器时：
+sh scripts/tls-test-down.sh
+```
+
+使用完整 JDK（含 keytool）、Maven、Docker 和 OpenSSL。启动脚本拒绝已有证书目录及同名容器；
+仅绑定本机端口：17679–17681（Standalone）、17601–17603（Cluster）、17701–17702
+（Sentinel 数据）、27701–27703（Sentinel 控制）。测试会变更这些专用实例的 Slot 和主节点，
+不得指向业务环境。关闭脚本检查 `io.github.susongyan.boba-test=tls` 标签，只删除四个专用容器，
+数据不持久化；保留证书目录，不删除其他 Redis 实例。
+
+证书仅供测试，7 天过期，私钥不入库。PKCS12 用测试密码 `test-only` 和兼容 JDK 8 的
+SHA-1/3DES 容器编码；这不是生产密钥存储建议，也不改变 TLS 1.2/1.3 传输策略。
+过期后关闭测试容器并指定新的证书目录重建。Redis 5 没有原生 TLS，仍由明文兼容矩阵覆盖。
+
+### C7 回归中发现的 deadline 边界修复
+
+首轮 full 在 JDK 8 的既有 `commandTimeoutIsOwnedByTheConnectionEventLoop` 停住。
+线程栈显示调用线程等待同步 GET，测试服务端等待客户端关闭，EventLoop 停在 Selector 等待。
+检查发现 `nextSelectTimeoutMillis()` 在 deadline 恰好到期时返回 0；
+`Selector.select(0)` 的含义是无限等待，不是立即轮询。这条竞态同样影响 TLS 握手 deadline。
+
+已将到期及亚毫秒剩余时间统一限制为至少 1 ms，保留任务/已到期工作触发的 `selectNow()` 路径；
+新增确定性边界测试 `deadlineExpiringBetweenDueCheckAndSelectCannotCauseAnInfiniteWait`。
+不把该问题与历史非法 H 测试端口冲突混为同一根因。
 
 ## C6 执行分组（2026-10-05）
 

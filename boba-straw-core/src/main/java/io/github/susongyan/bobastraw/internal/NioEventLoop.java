@@ -282,8 +282,13 @@ final class NioEventLoop {
             return SELECT_TIMEOUT_MILLIS;
         }
         long remainingNanos = next.deadlineNanos - System.nanoTime();
+        return boundedSelectTimeoutMillis(remainingNanos);
+    }
+
+    /** Selector.select(0) waits indefinitely, even when the deadline has just expired. */
+    static long boundedSelectTimeoutMillis(long remainingNanos) {
         if (remainingNanos <= 0L) {
-            return 0L;
+            return 1L;
         }
         long remainingMillis = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(remainingNanos);
         if (remainingMillis == 0L) {

@@ -32,6 +32,7 @@ public final class BobaStrawClusterClient implements AutoCloseable {
     private final BobaStrawClientResources resources;
     private final boolean ownsResources;
     private final NioConnectionFactory connectionFactory;
+    private final BobaStrawTlsOptions tlsOptions;
     private final RespLimits respLimits;
     private final BobaStrawConnectionLimits connectionLimits;
     private final List<Seed> seeds;
@@ -58,7 +59,8 @@ public final class BobaStrawClusterClient implements AutoCloseable {
         if (!resources.isOpen()) {
             throw new BobaStrawConnectionException("Boba Straw client resources are closed");
         }
-        this.connectionFactory = resources.connectionFactory();
+        this.tlsOptions = builder.tlsOptions;
+        this.connectionFactory = resources.connectionFactory().withTls(tlsOptions);
         this.respLimits = builder.respLimits;
         this.connectionLimits = builder.connectionLimits;
         this.timeout = builder.timeout;
@@ -617,6 +619,7 @@ public final class BobaStrawClusterClient implements AutoCloseable {
             }
             BobaStrawClient client = BobaStrawClient.builder()
                 .endpoint(endpoint.host, endpoint.port).resources(resources)
+                .tls(tlsOptions)
                 .protocol(protocol).credentials(username, password).clientName(clientName)
                 .commandTimeout(timeout).respLimits(respLimits).connectionLimits(connectionLimits)
                 .reconnectInterval(reconnectInterval).reconnectMaxInterval(reconnectMaxInterval).build();
@@ -920,6 +923,14 @@ public final class BobaStrawClusterClient implements AutoCloseable {
     }
 
     public static final class Builder {
+        private BobaStrawTlsOptions tlsOptions;
+
+        /** Applies TLS to seeds, discovered nodes, redirects and dedicated connections. */
+        public Builder tls(BobaStrawTlsOptions value) {
+            tlsOptions = value;
+            return this;
+        }
+
         private final List<Seed> seeds = new ArrayList<Seed>();
         private boolean explicitSeeds;
         private Duration timeout = Duration.ofSeconds(2);

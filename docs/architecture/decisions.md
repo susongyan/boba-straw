@@ -64,7 +64,9 @@ Standalone 已达到基础验收。Cluster 普通主节点命令具有节点退�
 不污染共享连接状态和永久 Slot 映射。完整边界见 [cluster-topology.md](cluster-topology.md)。
 C6 增加单 Slot Pipeline/事务、BLPOP/BRPOP 与经典 Pub/Sub；不等于生产长稳验收。
 Sentinel 普通主节点命令通过独立入口实现：重新发现、同连接 ROLE 校验、两套认证与旧连接退休；
-见 [sentinel-topology.md](sentinel-topology.md)。C6 专用组合绑定主节点代次，失败不迁移/重放；TLS 仍未实现。
+见 [sentinel-topology.md](sentinel-topology.md)。C6 专用组合绑定主节点代次，失败不迁移/重放。
+C7 已接入 SSLEngine TLS 和三拓扑配置传播，并完成本机 JSSE、真实 TLS 服务矩阵及
+确定性 I/O 故障验收；不能等同生产长稳承诺。设计与边界见 network-model 的 C7 节。
 
 ## Command surface
 

@@ -1,13 +1,16 @@
 #!/usr/bin/env sh
-# Usage: sh scripts/run-compatibility-matrix.sh unit|full JAVA_HOME [JAVA_HOME ...]
+# Usage: sh scripts/run-compatibility-matrix.sh unit|full|full-tls JAVA_HOME [JAVA_HOME ...]
 # full requires the standalone, Cluster and Sentinel test fixtures already running.
 set -eu
 
 mode=${1:-}
 case "$mode" in
-    unit|full) shift ;;
-    *) echo "Usage: $0 unit|full JAVA_HOME [JAVA_HOME ...]" >&2; exit 2 ;;
+    unit|full|full-tls) shift ;;
+    *) echo "Usage: $0 unit|full|full-tls JAVA_HOME [JAVA_HOME ...]" >&2; exit 2 ;;
 esac
+if [ "$mode" = full-tls ]; then
+    test -f "${BOBA_TLS_CERT_DIR:?Set BOBA_TLS_CERT_DIR}/client.p12"
+fi
 if [ "$#" -eq 0 ]; then
     echo "At least one explicit JAVA_HOME is required" >&2
     exit 2
@@ -59,7 +62,10 @@ for java_home in "$@"; do
         cd "$evidence/build"
         export JAVA_HOME="$java_home"
         export PATH="$JAVA_HOME/bin:$PATH"
-        if [ "$mode" = full ]; then
+        if [ "$mode" = full-tls ]; then
+            "$maven" --batch-mode clean test -Dboba.straw.runCompatibility=true \
+                -Dboba.straw.runCluster=true -Dboba.straw.runSentinel=true -Dboba.straw.runTls=true
+        elif [ "$mode" = full ]; then
             "$maven" --batch-mode clean test -Dboba.straw.runCompatibility=true \
                 -Dboba.straw.runCluster=true -Dboba.straw.runSentinel=true
         else

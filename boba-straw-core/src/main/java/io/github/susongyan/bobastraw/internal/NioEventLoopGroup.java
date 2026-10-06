@@ -2,12 +2,26 @@ package io.github.susongyan.bobastraw.internal;
 
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 
 /** Fixed-size owner of shared selector event loops. */
 public final class NioEventLoopGroup implements AutoCloseable {
     private final NioEventLoop[] loops;
     private final AtomicInteger nextLoop = new AtomicInteger();
     private final AtomicBoolean closed = new AtomicBoolean();
+    private final ExecutorService tlsTasks = new ThreadPoolExecutor(
+        2, 2, 30L, TimeUnit.SECONDS, new ArrayBlockingQueue<Runnable>(64), action -> {
+            Thread thread = new Thread(action, "boba-straw-tls-task");
+            thread.setDaemon(true);
+            return thread;
+        }, new ThreadPoolExecutor.AbortPolicy());
+
+    ExecutorService tlsTasks() {
+        return tlsTasks;
+    }
 
     public NioEventLoopGroup(int threads) {
         this(threads, NioIoLimits.DEFAULT);
@@ -63,6 +77,7 @@ public final class NioEventLoopGroup implements AutoCloseable {
         if (!closed.compareAndSet(false, true)) {
             return;
         }
+        tlsTasks.shutdownNow();
         for (NioEventLoop loop : loops) {
             loop.requestShutdown();
         }

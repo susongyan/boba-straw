@@ -8,8 +8,18 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 
 class NioEventLoopDeadlineTest {
+    @Test
+    void deadlineExpiringBetweenDueCheckAndSelectCannotCauseAnInfiniteWait() {
+        assertEquals(1L, NioEventLoop.boundedSelectTimeoutMillis(-1L));
+        assertEquals(1L, NioEventLoop.boundedSelectTimeoutMillis(0L));
+        assertEquals(1L, NioEventLoop.boundedSelectTimeoutMillis(999999L));
+        assertEquals(2L, NioEventLoop.boundedSelectTimeoutMillis(2000000L));
+        assertEquals(100L, NioEventLoop.boundedSelectTimeoutMillis(Long.MAX_VALUE));
+    }
+
     @Test
     void runsDueDeadlineOnTheOwningEventLoop() throws Exception {
         NioEventLoop eventLoop = new NioEventLoop("boba-straw-deadline-test");

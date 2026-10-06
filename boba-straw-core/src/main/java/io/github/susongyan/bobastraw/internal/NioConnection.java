@@ -7,6 +7,7 @@ import io.github.susongyan.bobastraw.BobaStrawCommandTimeoutException;
 import io.github.susongyan.bobastraw.BobaStrawConnectionException;
 import io.github.susongyan.bobastraw.BobaStrawConnectionLimits;
 import io.github.susongyan.bobastraw.BobaStrawServerException;
+import io.github.susongyan.bobastraw.BobaStrawTlsOptions;
 import io.github.susongyan.bobastraw.ProtocolVersion;
 import io.github.susongyan.bobastraw.protocol.RespCodec;
 import io.github.susongyan.bobastraw.protocol.RespLimits;
@@ -25,6 +26,7 @@ import java.util.List;
 import java.util.Queue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.ExecutorService;
 import java.util.function.Consumer;
 
 /** One non-blocking TCP connection with FIFO response matching. */
@@ -74,6 +76,11 @@ public final class NioConnection implements AutoCloseable {
     private final List<Runnable> readyListeners = new ArrayList<Runnable>();
     private boolean resourcesClosing;
     private boolean resourcesClosed;
+    private final BobaStrawTlsOptions tlsOptions;
+    private final ExecutorService tlsExecutor;
+    private NioTlsTransport tls;
+    private NioEventLoop.ScheduledTask tlsDeadline;
+    private boolean redisHandshakeStarted;
     private volatile boolean drainingPushCallbacks;
 
     /**
@@ -222,6 +229,16 @@ public final class NioConnection implements AutoCloseable {
             pushListener, idlePingInterval, null, respLimits, connectionLimits, callbackDispatcher);
     }
 
+    NioConnection(NioEventLoop eventLoop, String host, int port, Duration timeout,
+        ProtocolVersion requestedProtocol, String username, String password, String clientName,
+        Consumer<RespValue> pushListener, Duration idlePingInterval, RespLimits respLimits,
+        BobaStrawConnectionLimits connectionLimits, BobaCallbackDispatcher callbackDispatcher,
+        BobaStrawTlsOptions tlsOptions, ExecutorService tlsExecutor) {
+        this(eventLoop, host, port, timeout, requestedProtocol, username, password, clientName,
+            pushListener, idlePingInterval, null, respLimits, connectionLimits, callbackDispatcher,
+            tlsOptions, tlsExecutor);
+    }
+
     private NioConnection(
         NioEventLoop eventLoop,
         String host,
@@ -238,6 +255,17 @@ public final class NioConnection implements AutoCloseable {
         BobaStrawConnectionLimits connectionLimits,
         BobaCallbackDispatcher callbackDispatcher
     ) {
+        this(eventLoop, host, port, timeout, requestedProtocol, username, password, clientName,
+            pushListener, idlePingInterval, legacyOwnedEventLoops, respLimits, connectionLimits,
+            callbackDispatcher, null, null);
+    }
+
+    private NioConnection(NioEventLoop eventLoop, String host, int port, Duration timeout,
+        ProtocolVersion requestedProtocol, String username, String password, String clientName,
+        Consumer<RespValue> pushListener, Duration idlePingInterval,
+        NioEventLoopGroup legacyOwnedEventLoops, RespLimits respLimits,
+        BobaStrawConnectionLimits connectionLimits, BobaCallbackDispatcher callbackDispatcher,
+        BobaStrawTlsOptions tlsOptions, ExecutorService tlsExecutor) {
         if (respLimits == null) {
             throw new IllegalArgumentException("respLimits must not be null");
         }
@@ -245,6 +273,8 @@ public final class NioConnection implements AutoCloseable {
             throw new IllegalArgumentException("connectionLimits must not be null");
         }
         this.eventLoop = eventLoop;
+        this.tlsOptions = tlsOptions;
+        this.tlsExecutor = tlsExecutor;
         this.legacyOwnedEventLoops = legacyOwnedEventLoops;
         this.ioLimits = eventLoop.ioLimits();
         this.host = host;
@@ -757,10 +787,15 @@ public final class NioConnection implements AutoCloseable {
         }
         channel = SocketChannel.open();
         channel.configureBlocking(false);
+        if (tlsOptions != null) {
+            tlsDeadline = eventLoop.schedule(() -> onIoFailure(
+                new IOException("TLS connection handshake timed out")),
+                tlsOptions.handshakeTimeout().toNanos());
+        }
         boolean connected = channel.connect(new InetSocketAddress(host, port));
         key = channel.register(selector, connected ? SelectionKey.OP_READ : SelectionKey.OP_CONNECT, this);
         if (connected) {
-            startHandshake();
+            startTransportHandshake();
         }
     }
 
@@ -784,6 +819,19 @@ public final class NioConnection implements AutoCloseable {
             return;
         }
         try {
+            if (tls != null) {
+                tls.progress();
+                if (tls.isHandshaken() && !redisHandshakeStarted) {
+                    tlsDeadline.cancel();
+                    redisHandshakeStarted = true;
+                    startHandshake();
+                }
+                if (!closed && tls.isHandshaken() && tls.hasBufferedInput()
+                    && responseBudgetRemainingThisTurn > 0) {
+                    read();
+                }
+                updateTlsMetrics();
+            }
             if (bufferedResponsesPending && responseBudgetRemainingThisTurn > 0) {
                 drainAvailableResponses();
             }
@@ -791,11 +839,14 @@ public final class NioConnection implements AutoCloseable {
             checkIdle();
         } finally {
             responseBudgetRemainingThisTurn = ioLimits.maxDecodedResponsesPerTurn;
+            if (tls != null) {
+                tls.resetBudget();
+            }
         }
     }
 
     boolean hasImmediateWork() {
-        return bufferedResponsesPending;
+        return bufferedResponsesPending || (tls != null && tls.hasBufferedInput());
     }
 
     void onIoFailure(Throwable error) {
@@ -1083,8 +1134,28 @@ public final class NioConnection implements AutoCloseable {
     private void connect(SelectionKey selectedKey) throws IOException {
         if (channel.finishConnect()) {
             selectedKey.interestOps(SelectionKey.OP_READ);
-            startHandshake();
+            startTransportHandshake();
         }
+    }
+
+    private void startTransportHandshake() throws IOException {
+        if (tlsOptions == null) {
+            startHandshake();
+        } else {
+            tls = new NioTlsTransport(tlsOptions.createEngine(host, port), channel, eventLoop,
+                tlsExecutor, this::onIoFailure);
+            tls.progress();
+        }
+    }
+
+    private void updateTlsMetrics() {
+        if (socketBytesRead != tls.bytesRead || socketBytesWritten != tls.bytesWritten) {
+            lastActivityNanos = System.nanoTime();
+        }
+        socketReadOperations = tls.readOperations;
+        socketBytesRead = tls.bytesRead;
+        socketWriteOperations = tls.writeOperations;
+        socketBytesWritten = tls.bytesWritten;
     }
 
     private void startHandshake() {
@@ -1173,12 +1244,22 @@ public final class NioConnection implements AutoCloseable {
         if (channel == null || !channel.isConnected() || key == null || !key.isValid()) {
             return;
         }
-        if (!outbound.isEmpty()) {
+        if (tls != null) {
+            int interest = tls.tasksRunning() ? 0 : SelectionKey.OP_READ;
+            if (tls.wantsWrite() || (tls.canWriteApplication() && !outbound.isEmpty())) {
+                interest |= SelectionKey.OP_WRITE;
+            }
+            key.interestOps(interest);
+        } else if (!outbound.isEmpty()) {
             key.interestOps(key.interestOps() | SelectionKey.OP_WRITE);
         }
     }
 
     private void write(SelectionKey selectedKey) throws IOException {
+        if (tls != null) {
+            tls.progress();
+            updateTlsMetrics();
+        }
         if (outbound.isEmpty()) {
             selectedKey.interestOps(selectedKey.interestOps() & ~SelectionKey.OP_WRITE);
             return;
@@ -1193,7 +1274,8 @@ public final class NioConnection implements AutoCloseable {
         long written = 0L;
         boolean writeCompleted = false;
         try {
-            written = channel.write(writeBuffers, 0, frameCount);
+            written = tls == null ? channel.write(writeBuffers, 0, frameCount)
+                : tls.write(writeBuffers, frameCount);
             writeCompleted = true;
         } catch (IOException error) {
             markWriteBatchAsPossiblySent(frameCount);
@@ -1206,7 +1288,9 @@ public final class NioConnection implements AutoCloseable {
                 clearWriteBatch(frameCount);
             }
         }
-        if (written > 0L) {
+        if (tls != null) {
+            updateTlsMetrics();
+        } else if (written > 0L) {
             socketWriteOperations++;
             socketBytesWritten += written;
             lastActivityNanos = System.nanoTime();
@@ -1234,16 +1318,21 @@ public final class NioConnection implements AutoCloseable {
             readBuffer.clear();
             int readLimit = Math.min(readBuffer.capacity(), remainingReadBytes);
             readBuffer.limit(readLimit);
-            int count = channel.read(readBuffer);
+            int count = tls == null ? channel.read(readBuffer) : tls.read(readBuffer);
+            if (tls != null) {
+                updateTlsMetrics();
+            }
             if (count == -1) {
                 throw new IOException("Redis closed the connection");
             }
             if (count == 0) {
                 return;
             }
-            socketReadOperations++;
-            socketBytesRead += count;
-            lastActivityNanos = System.nanoTime();
+            if (tls == null) {
+                socketReadOperations++;
+                socketBytesRead += count;
+                lastActivityNanos = System.nanoTime();
+            }
             remainingReadBytes -= count;
             processInbound(readBuffer.array(), count);
             if (responseBudgetRemainingThisTurn == 0) {
@@ -1632,6 +1721,12 @@ public final class NioConnection implements AutoCloseable {
         try {
             if (closePushCallbacks && pushCallbacks != null) {
                 pushCallbacks.close();
+            }
+            if (tlsDeadline != null) {
+                tlsDeadline.cancel();
+            }
+            if (tls != null) {
+                tls.close();
             }
             SelectionKey currentKey = key;
             key = null;

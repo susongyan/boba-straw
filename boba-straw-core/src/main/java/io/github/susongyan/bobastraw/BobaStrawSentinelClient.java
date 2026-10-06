@@ -22,6 +22,8 @@ public final class BobaStrawSentinelClient implements AutoCloseable {
     private final String masterName;
     private final String sentinelUsername;
     private final String sentinelPassword;
+    private final BobaStrawTlsOptions tlsOptions;
+    private final NioConnectionFactory sentinelFactory;
     private final String username;
     private final String password;
     private final ProtocolVersion protocol;
@@ -53,6 +55,7 @@ public final class BobaStrawSentinelClient implements AutoCloseable {
             }
             if (dedicatedClient == null) {
                 dedicatedClient = BobaStrawClient.builder().resources(resources)
+                    .tls(tlsOptions)
                     .endpoint(masterEndpoint.host, masterEndpoint.port).credentials(username, password)
                     .protocol(protocol).commandTimeout(commandTimeout).respLimits(respLimits)
                     .connectionLimits(connectionLimits).build();
@@ -82,7 +85,9 @@ public final class BobaStrawSentinelClient implements AutoCloseable {
     private BobaStrawSentinelClient(Builder builder) {
         ownsResources = builder.resources == null;
         resources = ownsResources ? BobaStrawClientResources.builder().build() : builder.resources;
-        factory = resources.connectionFactory();
+        tlsOptions = builder.tlsOptions;
+        factory = resources.connectionFactory().withTls(tlsOptions);
+        sentinelFactory = resources.connectionFactory().withTls(builder.sentinelTlsOptions);
         sentinels = new ArrayList<Endpoint>(builder.sentinels);
         Collections.shuffle(sentinels);
         masterName = builder.masterName;
@@ -351,7 +356,8 @@ public final class BobaStrawSentinelClient implements AutoCloseable {
     }
 
     private NioConnection connect(Endpoint endpoint, boolean sentinel) {
-        return factory.create(endpoint.host, endpoint.port, sentinel ? discoveryTimeout : commandTimeout,
+        return (sentinel ? sentinelFactory : factory).create(
+            endpoint.host, endpoint.port, sentinel ? discoveryTimeout : commandTimeout,
             protocol, sentinel ? sentinelUsername : username, sentinel ? sentinelPassword : password,
             null, null, Duration.ZERO, respLimits, connectionLimits);
     }
@@ -607,6 +613,21 @@ public final class BobaStrawSentinelClient implements AutoCloseable {
     }
 
     public static final class Builder {
+        private BobaStrawTlsOptions tlsOptions;
+        private BobaStrawTlsOptions sentinelTlsOptions;
+
+        /** Data-node TLS policy, also used after failover and for dedicated connections. */
+        public Builder tls(BobaStrawTlsOptions value) {
+            tlsOptions = value;
+            return this;
+        }
+
+        /** Independent TLS policy for Sentinel discovery/control connections. */
+        public Builder sentinelTls(BobaStrawTlsOptions value) {
+            sentinelTlsOptions = value;
+            return this;
+        }
+
         private final List<Endpoint> sentinels = new ArrayList<Endpoint>();
         private String masterName;
         private String sentinelUsername;

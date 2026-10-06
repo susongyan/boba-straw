@@ -305,6 +305,249 @@ in-flight/待写字节与本连接背压拒绝计数。
 连接必须提供有界保护：最大 in-flight 命令数、最大待写字节、最大 RESP 响应、
 最大 Pub/Sub 分发积压。超限时本地明确拒绝，不能静默丢弃或无限缓存。
 
+## C7 TLS 传输设计
+
+本节属于**核心收尾计划 C7**，不是下文网络模型演进的“阶段 6”。截至 2026-10-06，
+SSLEngine 传输、配置传播、本机 JSSE 与真实 Redis/Valkey TLS 功能验收已落地。
+实施与验证状态统一记录在[核心收尾计划](../implementation/core-completion-plan.md)。
+确定性故障测试与真实服务互通测试相互补充；功能验收不等于生产长稳验收。
+
+### 我们要解决什么问题
+
+Redis 密码认证解决“谁能执行命令”，不保护网络上的密码、Key、Value 和返回结果。
+跨机器或不可信网络访问 Redis 时，还需要防止窃听、篡改，以及连接到冒充 Redis 的服务。
+因此 TLS 必须在核心物理连接层完成；只给 Starter 添加开关，不能覆盖独立 Java 使用者，
+也不能保护 Cluster 重定向、Sentinel 发现和事务等新建连接。
+
+核心目标是：**同一套客户端 API、连接模型和失败语义，在可信加密通道上继续工作。**
+
+- 验证服务端证书和访问主机身份；支持私有 CA，以及服务端要求的客户端证书。
+- 所有 Redis 握手和命令都在 TLS 建立后发送；安全校验失败不能回退到明文。
+- 保留 Java 8 和 JDK-only 运行时，不引入网络框架，也不为每条连接增加线程。
+- 不把加密层当作重试层：TLS 断连仍不能证明命令没有执行。
+
+不在本阶段引入证书自动签发、运行中热换证、TLS early data 或第三方安全提供者。
+长期稳定性和吞吐调优另行验证；这不免除本阶段的安全、功能和资源释放测试。
+
+### 使用者需要关心什么
+
+普通命令 API 不变。使用系统信任库的应用只需选择加密地址；企业私有 CA 或 mTLS 场景
+通过标准 JDK `SSLContext` 提供信任材料和客户端身份。以下配置入口已实现：
+
+```java
+// rediss 启用 TLS，并校验证书和主机名。
+BobaStrawClient client = BobaStrawClient.builder()
+    .uri("rediss://cache.example.internal:6379")
+    .build();
+
+// 企业应用提供已配置 trust manager / key manager 的 SSLContext。
+BobaStrawClient privateCaClient = BobaStrawClient.builder()
+    .uri("rediss://cache.example.internal:6379")
+    .tls(BobaStrawTlsOptions.builder()
+        .sslContext(companySslContext)
+        .handshakeTimeout(Duration.ofSeconds(5))
+        .build())
+    .build();
+```
+
+| 配置项 | 设计默认值与边界 |
+| --- | --- |
+| 是否启用 | 不配置 TLS 的现有连接保持明文；`rediss` 或显式 TLS options 启用加密；未知 URI scheme 拒绝 |
+| 信任材料 | JDK 默认 `SSLContext`；私有 CA 使用应用提供的 context |
+| 主机身份 | 开启端点身份校验；不提供跳过主机名校验的便捷开关 |
+| 协议 | 仅启用当前 JDK 支持的 TLS 1.2 / 1.3；不启用 TLS 1.0 / 1.1；显式指定不支持的版本应失败 |
+| 建连与握手预算 | 默认 5 秒，从开始建立物理连接计时，覆盖 TCP 建连和 TLS 握手；不是每次握手进展都重置 |
+| 命令超时 | 仍从提交时计时，包含等待连接及握手的时间；不因 TLS 成功而重新计时 |
+| 校验失败 | 连接失败，暴露原因，不降级为明文，不重放命令 |
+
+TLS 版本能力取决于具体 JDK/provider，不能将“兼容 Java 8”解释为所有 Java 8 都支持 TLS 1.3。
+自定义 `SSLContext` 的 trust manager 由应用负责：客户端不安装 trust-all 实现，也无法替
+应用保证其自定义信任策略安全。证书、私钥和密码不得进入日志、异常详情或指标标签。
+端点身份校验使用 JDK 的 `HTTPS` 名称匹配算法；这只是证书校验规则，不会发送 HTTP，
+也不依赖 Web 框架。密码套件与算法禁用策略仍由所用 JDK/provider 的安全配置决定。
+
+### 为什么采用 SSLEngine，而不是另建一套 SSL 连接池
+
+`SSLSocket` 将 TLS 与 socket I/O 绑定，若以阻塞方式接入，会破坏当前共享 Selector 的
+线程模型。`SSLEngine` 则只负责握手及加解密，网络读写仍由 `SocketChannel` 完成。
+这样，普通共享连接、专用连接和拓扑连接可以复用同一条路径，RESP 解码器也无需认识 TLS。
+
+```mermaid
+graph LR
+    Requests["请求 FIFO 和 RESP 编码"] --> PlainOut["待加密命令字节"]
+    PlainOut --> Wrap["SSLEngine wrap"]
+    Wrap --> NetOut["待写密文字节"]
+    NetOut --> Socket["SocketChannel"]
+    Socket --> NetIn["未消费密文字节"]
+    NetIn --> Unwrap["SSLEngine unwrap"]
+    Unwrap --> Decoder["现有 RESP 增量解码器"]
+    Decoder --> Dispatch["响应匹配和 Push 分发"]
+```
+
+TLS record 与 Redis 命令、RESP 响应没有一一对应关系：一个 record 可以包含多个响应，
+一个响应也可以跨多个 record。解密后的字节继续交给现有增量解析器；Attribute 和 Push
+不占用普通响应的位置。不能将一次 `unwrap` 成功当作“一条命令完成”。
+
+### 连接建立：先 TLS，再 Redis
+
+只有完成 **TCP、TLS、Redis 协商** 三步，连接才能进入 READY。TLS 握手失败时，
+HELLO、AUTH 和应用命令都不应被发送。RESP AUTO 的回退只发生在已建立的 TLS 通道内，
+证书错误不能被解释为“不支持 HELLO 3”。
+
+```mermaid
+sequenceDiagram
+    participant App as 应用
+    participant Nio as 所属 EventLoop
+    participant Worker as TLS 任务执行器
+    participant Redis as Redis 服务端
+    App->>Nio: 提交命令并开始命令 deadline
+    Nio->>Redis: TCP connect
+    Nio->>Redis: TLS 握手报文
+    Redis-->>Nio: TLS 握手报文
+    opt SSLEngine 要求 delegated task
+        Nio->>Worker: 提交证书等握手任务
+        Worker-->>Nio: 将任务结果投递回 EventLoop
+    end
+    alt TLS 校验成功
+        Nio->>Redis: 加密的 HELLO 或 AUTH
+        Redis-->>Nio: 加密的 Redis 协商结果
+        Note over Nio: Redis 协商成功后 READY
+        Nio->>Redis: 加密的应用命令
+        Redis-->>Nio: 加密的响应
+        Nio-->>App: 沿用现有结果交付路径
+    else TLS 校验失败或握手超时
+        Nio->>Nio: 关闭连接并释放资源
+        Nio-->>App: 明确失败，应用命令未发送
+    end
+```
+
+这张时序图省略了可能多轮的握手交互；异步结果仍通过 callback dispatcher 交付，
+不会因为引入 TLS 就在 EventLoop 上运行应用回调。
+
+```mermaid
+graph TD
+    TCP["TCP_CONNECTING"] --> TLS["TLS_HANDSHAKING"]
+    TLS --> Redis["REDIS_NEGOTIATING"]
+    Redis --> Ready["READY"]
+    TCP --> Failed["连接失败"]
+    TLS --> Failed
+    Redis --> Failed
+    Ready --> Failed
+    Failed --> Closed["关闭物理连接并终结请求"]
+    Closed --> Policy["由连接所有者决定后续生命周期"]
+    Policy --> Backoff["共享连接按现有策略退避"]
+    Backoff --> TCP
+    Policy --> End["专用连接销毁或通知订阅终止"]
+```
+
+这是逻辑状态图，不要求直接新增同名公开枚举。重连创建新的物理连接和 `SSLEngine`，
+再次执行身份校验和 Redis 握手；已失败命令不随新连接重发。Client 或 Resources 已关闭时，
+不得再进入退避重连。
+
+### EventLoop 的边界与公平性
+
+连接仍固定属于一个 EventLoop。除了 SSLEngine 返回的 delegated task，所有 wrap、unwrap、
+缓冲区位置、Selector interest、请求队列和状态迁移都由该 EventLoop 操作。
+
+证书验证等 delegated task 可能耗时，不能阻塞同一 Selector 上的其他连接；也不能占用
+业务 callback worker，否则慢业务回调可能反过来阻止 TLS 握手。设计使用 Resources 级
+共享的独立、有界 TLS 任务执行器，按需启动线程，Resources 关闭时关闭它。
+队列满时让握手明确失败，不创建无界线程或退回 EventLoop 执行。
+当前上限为每个 Resources 两个 worker、64 个排队任务；线程按首次任务启动，不按连接创建。
+
+任务运行期间暂停该 engine 的相关操作；完成后仅投递结果，由 EventLoop 检查连接是否
+仍有效再继续。超时或关闭后的迟到结果不得重新注册 socket、改变新连接状态或恢复发送。
+对应用提供的阻塞 trust manager，只能尽力中断；不能声称任意用户代码都可强制停止。
+
+| 引擎状态或结果 | I/O 层处理原则 |
+| --- | --- |
+| NEED_WRAP | 生成握手密文；已有未写完密文必须先排空 |
+| NEED_UNWRAP | 消费已有输入，确实缺字节时才等待 OP_READ |
+| NEED_TASK | 交给独立 TLS 执行器，完成后回到所属 EventLoop |
+| FINISHED / NOT_HANDSHAKING | 确认初次握手完成后推进 Redis 协商；不能重复激活请求 |
+| BUFFER_UNDERFLOW | 保留碎片并等待更多密文，不丢弃、不重复解密 |
+| BUFFER_OVERFLOW | 根据 session 要求在硬上限内扩容或先消费输出；超限失败 |
+| CLOSED | 处理 TLS 关闭；未完成请求按现有执行状态失败 |
+
+实现还需兼容 TLS 1.3 的握手后消息和 provider 行为；若需识别 Java 8 中不存在的枚举值，
+不能直接引用新 JDK API。任何零进展循环都必须退出或等待事件，不能在 Selector 上忙转。
+
+沿用每轮连接读写与响应分发预算；密文也受相同字节预算限制，每轮最多 64 次常规
+wrap/unwrap 调用，缓冲不足时的重试由缓冲硬上限约束。只有待写密文、可推进的握手或
+可编码的应用数据存在时才关注 OP_WRITE；输入不足时不能因保留着碎片而不断 `selectNow()`。
+已缓存在内部、可继续处理的数据则不能等待下一次网络可读事件才处理。
+
+### 缓冲、取消与失败语义：不能把加密完成当作发送成功
+
+每条 TLS 连接拥有独立的密文输入、密文输出和明文输出缓冲。大小依据 session 的 packet /
+application buffer 要求，按需扩容，每个缓冲硬上限为 256 KiB（三者合计最多 768 KiB，
+不包含 JDK engine 自身、RESP decoder 和请求队列内存）。
+禁止建立无界“已加密待发送”队列；前一批密文未排空前，不继续无界消费命令帧。
+
+相比明文路径，TLS 多了一个不可随意回滚的边界：`wrap` 消费命令字节后，密文已经包含
+协议状态和序列信息，不能从密文中删除被取消的某条命令。C7 采用保守、可解释的规则：
+
+| 请求所处位置 | 取消、超时或断连时的语义 |
+| --- | --- |
+| 尚未被 wrap 消费的排队命令 | 可移除，明确未发送 |
+| 已有任何命令字节被 wrap 消费 | 视为已进入不可撤销发送路径，保守报告“可能已执行” |
+| 密文已写入网络，等待 RESP 响应 | 同样可能已执行；保留响应占位，或随连接销毁统一终结 |
+| 已获得明确 Redis 响应 | 按 Redis 返回结果完成，不由 TLS 重新解释 |
+
+因此 TLS 下“可能已执行”**不是断言数据已经上网**，而是客户端不能承诺安全撤销。
+取消不会撤回服务端执行；共享连接若继续使用，就必须继续完成必要写入并排空对应响应，
+避免污染后续 FIFO。事务、阻塞命令和 Pub/Sub 仍遵守各自的专用连接取消与销毁规则。
+
+背压需要同时覆盖明文队列和 TLS 缓冲：明文待写容量可以随 wrap 消费归还，但密文缓冲
+必须独立有界。in-flight 命令槽位仍保留到响应排空或连接终结。现有“待写字节”指标在 TLS
+下必须注明是待加密明文字节，不能声称它包含所有未上网的数据；网络读写字节则按实际
+socket 密文字节计数，包含握手开销，不能直接与明文命令吞吐比较。
+
+### 拓扑、专用连接与关闭
+
+TLS 配置必须通过连接工厂传递，不能只在首次连接时生效。每条新物理连接都需要单独握手。
+
+| 连接路径 | 必须保留的配置与身份边界 |
+| --- | --- |
+| Standalone 共享连接及重连 | 相同 TLS 策略，新 engine；完整握手后才记为连接恢复 |
+| 事务池、阻塞命令、Pub/Sub | 继承所属客户端的 TLS；不退回明文专用连接 |
+| Cluster 种子、发现的节点、MOVED/ASK 目标 | 都使用 Cluster TLS 策略；逐个校验实际目标主机 |
+| Sentinel 控制连接 | 独立的 Sentinel TLS 配置，与 Sentinel 凭证一致地作用于控制链路 |
+| Sentinel 数据连接及切换后的主节点 | 独立的数据 TLS 配置；切换后继承，专用连接也继承 |
+
+Cluster 或 Sentinel 通告 IP 时，服务端证书应包含对应 IP 身份；不能以最初种子的证书主机名
+替所有发现节点背书。若部署的通告地址与证书不匹配，应修正部署或另行设计显式地址映射，
+不能通过自动关闭身份校验“修复”。Sentinel 控制链路与数据链路可显式采用不同安全配置，
+但失败时不能自动从 TLS 降级到明文。
+
+主动关闭时尽力发送 `close_notify`：仅在没有运行中的 engine 任务、没有未排空密文时，
+执行一次 wrap 和一次受剩余写预算约束的非阻塞写；不等待对端应答或延长租约。
+故障关闭或 Resources 退出时优先确保 socket、Selector key、deadline 和请求占位释放。
+对端 `close_notify` 和未通知的 EOF 都不能让尚未收到完整 RESP 的命令成功；后者还应保留
+TLS 非正常关闭的原因。异步握手任务不得延长连接租约，更不得让已关闭的连接复活。
+
+### 如何证明设计成立
+
+C7 功能完成至少需要以下证据，具体结果放到执行计划，不在设计文档堆叠运行日志：
+
+1. 安全边界：受信任证书成功；未知 CA、主机名不匹配、过期证书失败；mTLS 缺少客户端身份
+   失败、正确身份成功；失败前没有 Redis 明文或应用命令发送，也没有自动降级。
+2. 协议边界：碎片密文、部分写、跨 record 大响应、Pipeline、Push/Attribute 仍正确匹配；
+   握手后消息不被当作 RESP；TLS 1.2 和环境支持的 TLS 1.3 分别测试。
+3. 生命周期：握手超时、任务队列饱和、取消、关闭、迟到任务、对端 EOF 和退避重连有界终结；
+   事务及订阅退出不会泄漏连接；重连不重放旧请求。
+4. 接入完整性：Standalone、Cluster 重定向与节点变化、Sentinel 主节点切换及各类专用连接
+   都有 TLS 覆盖证据，不能以单个 TLS PING 代替拓扑验收。
+5. 基线回归：JDK 8 编译与测试、JDK 21 测试、现有明文回归通过；核心不增加外部运行时依赖。
+
+长稳、跨主机故障分区、扩展 JDK/OS 与正式性能压测在 C7/C8 功能实现后开展。
+“功能通过”不等于完成这些生产环境验证，也不等于外部安全审计。
+
+设计依据：[JDK 8 SSLEngine](https://docs.oracle.com/javase/8/docs/api/javax/net/ssl/SSLEngine.html)
+的非阻塞握手、任务与缓冲契约，以及
+[SSLParameters](https://docs.oracle.com/javase/8/docs/api/javax/net/ssl/SSLParameters.html)
+的端点身份校验配置。上面的所有权、背压与失败边界是 Boba Straw 的设计选择。
+
 ## 分阶段实施与验收
 
 1. **连接正确性**：收敛队列状态所有权，修复取消/写入竞态；Future 在锁外完成。

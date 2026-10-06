@@ -82,7 +82,10 @@ public final class BobaStrawClientMetrics {
         return inFlightCommands;
     }
 
-    /** Encoded application-command bytes still awaiting socket write. */
+    /**
+     * Encoded command bytes awaiting socket write (plain TCP) or encryption (TLS).
+     * Does not include the separately bounded TLS ciphertext buffer.
+     */
     public long queuedWriteBytes() {
         return queuedWriteBytes;
     }
@@ -97,7 +100,7 @@ public final class BobaStrawClientMetrics {
         return socketReadOperations;
     }
 
-    /** Bytes received by the current shared physical connection. */
+    /** Socket bytes received; TLS includes encrypted records and handshake traffic. */
     public long socketBytesRead() {
         return socketBytesRead;
     }
@@ -107,7 +110,7 @@ public final class BobaStrawClientMetrics {
         return socketWriteOperations;
     }
 
-    /** Bytes accepted by the socket for the current shared physical connection. */
+    /** Socket bytes written; TLS includes encrypted records and handshake traffic. */
     public long socketBytesWritten() {
         return socketBytesWritten;
     }
