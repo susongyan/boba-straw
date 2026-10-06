@@ -7,6 +7,18 @@
   <packaging>pom</packaging>
   <name>Boba Straw</name>
   <description>Lightweight pure Java Redis and Valkey client</description>
+  <url>https://github.com/susongyan/boba-straw</url>
+  <scm>
+    <connection>scm:git:https://github.com/susongyan/boba-straw.git</connection>
+    <developerConnection>scm:git:ssh://git@github.com/susongyan/boba-straw.git</developerConnection>
+    <url>https://github.com/susongyan/boba-straw</url>
+  </scm>
+  <developers>
+    <developer>
+      <id>susongyan</id>
+      <url>https://github.com/susongyan</url>
+    </developer>
+  </developers>
   <modules>
     <module>boba-straw-core</module>
     <module>boba-straw-test-support</module>
@@ -17,8 +29,13 @@
   <properties>
     <maven.compiler.source>1.8</maven.compiler.source>
     <maven.compiler.target>1.8</maven.compiler.target>
+    <maven.compiler.release>8</maven.compiler.release>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     <junit.version>5.10.2</junit.version>
+    <!-- Publishing is deliberately disabled until the release preconditions are satisfied. -->
+    <maven.deploy.skip>true</maven.deploy.skip>
+    <boba.coverage.line>0.0</boba.coverage.line>
+    <boba.coverage.branch>0.0</boba.coverage.branch>
   </properties>
   <build>
     <pluginManagement>
@@ -30,6 +47,7 @@
           <configuration>
             <source>${maven.compiler.source}</source>
             <target>${maven.compiler.target}</target>
+            <release>${maven.compiler.release}</release>
           </configuration>
         </plugin>
         <plugin>
@@ -40,4 +58,135 @@
       </plugins>
     </pluginManagement>
   </build>
+  <profiles>
+    <profile>
+      <id>quality</id>
+      <build>
+        <plugins>
+          <plugin>
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-checkstyle-plugin</artifactId>
+            <version>3.3.1</version>
+            <configuration>
+              <configLocation>${maven.multiModuleProjectDirectory}/config/checkstyle.xml</configLocation>
+              <includeTestSourceDirectory>true</includeTestSourceDirectory>
+            </configuration>
+            <executions>
+              <execution>
+                <phase>verify</phase>
+                <goals>
+                  <goal>check</goal>
+                </goals>
+              </execution>
+            </executions>
+          </plugin>
+          <plugin>
+            <groupId>com.github.spotbugs</groupId>
+            <artifactId>spotbugs-maven-plugin</artifactId>
+            <version>4.8.6.6</version>
+            <configuration>
+              <effort>Max</effort>
+              <threshold>High</threshold>
+              <excludeFilterFile>${maven.multiModuleProjectDirectory}/config/spotbugs-exclude.xml</excludeFilterFile>
+            </configuration>
+            <executions>
+              <execution>
+                <phase>verify</phase>
+                <goals>
+                  <goal>check</goal>
+                </goals>
+              </execution>
+            </executions>
+          </plugin>
+          <plugin>
+            <groupId>org.jacoco</groupId>
+            <artifactId>jacoco-maven-plugin</artifactId>
+            <version>0.8.14</version>
+            <executions>
+              <execution>
+                <goals>
+                  <goal>prepare-agent</goal>
+                </goals>
+              </execution>
+              <execution>
+                <id>coverage</id>
+                <phase>verify</phase>
+                <goals>
+                  <goal>report</goal>
+                </goals>
+              </execution>
+              <execution>
+                <id>coverage-gate</id>
+                <phase>verify</phase>
+                <goals>
+                  <goal>check</goal>
+                </goals>
+                <configuration>
+                  <rules>
+                    <rule>
+                      <element>BUNDLE</element>
+                      <limits>
+                        <limit>
+                          <counter>LINE</counter>
+                          <value>COVEREDRATIO</value>
+                          <minimum>${boba.coverage.line}</minimum>
+                        </limit>
+                        <limit>
+                          <counter>BRANCH</counter>
+                          <value>COVEREDRATIO</value>
+                          <minimum>${boba.coverage.branch}</minimum>
+                        </limit>
+                      </limits>
+                    </rule>
+                  </rules>
+                </configuration>
+              </execution>
+            </executions>
+          </plugin>
+        </plugins>
+      </build>
+    </profile>
+    <profile>
+      <id>release</id>
+      <properties>
+        <maven.deploy.skip>false</maven.deploy.skip>
+      </properties>
+      <build>
+        <plugins>
+          <plugin>
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-enforcer-plugin</artifactId>
+            <version>3.5.0</version>
+            <executions>
+              <execution>
+                <id>release-preconditions</id>
+                <goals>
+                  <goal>enforce</goal>
+                </goals>
+                <configuration>
+                  <rules>
+                    <requireReleaseVersion/>
+                    <requireReleaseDeps>
+                      <onlyWhenRelease>true</onlyWhenRelease>
+                    </requireReleaseDeps>
+                    <requireFilesExist>
+                      <files>
+                        <file>${maven.multiModuleProjectDirectory}/LICENSE</file>
+                        <file>${maven.multiModuleProjectDirectory}/NOTICE</file>
+                      </files>
+                    </requireFilesExist>
+                    <requireProperty>
+                      <property>boba.release.approved</property>
+                      <regex>true</regex>
+                      <message>Release requires explicit license, metadata and validation approval.</message>
+                    </requireProperty>
+                  </rules>
+                </configuration>
+              </execution>
+            </executions>
+          </plugin>
+        </plugins>
+      </build>
+    </profile>
+  </profiles>
 </project>

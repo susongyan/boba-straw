@@ -4,6 +4,11 @@
 
 `boba-straw-core` targets Java 8 and has no third-party runtime dependency. Java NIO is the only transport foundation. Java 21 virtual threads may call the blocking facade but are not part of the public baseline.
 
+Compilation uses `release=8` (Compiler Plugin 3.13.0 also supports this configuration on JDK 8).
+Bytecode version alone is insufficient: `source/target=8` on a newer JDK can still reference newer
+JDK APIs, notably covariant ByteBuffer methods. Clean multi-JDK builds, Animal Sniffer and the
+runtime dependency/bytecode tests jointly enforce this boundary; cached classes are not release evidence.
+
 ## Protocol
 
 The decoder has one RESP value model. RESP2 is a subset; RESP3 Push, Attribute, Blob Error, Verbatim String and Big Number values are parsed. Attribute values are unwrapped only after they have been kept separate from Push messages, so they cannot shift normal request-response FIFO matching. The decoder is an explicit incremental state machine with a compact input buffer and a non-recursive aggregate frame stack. `RespLimits` is enforced at this boundary; malformed or oversized replies terminate the physical connection rather than being truncated or retried.

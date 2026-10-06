@@ -30,7 +30,7 @@ C6.1～C6.5 已完成 binary、普通同步、String Pipeline/事务、BLPOP/BRP
 | C5 高频命令与三层 API | 冻结功能已实现；已定位并修复测试端口冲突导致的 H 路径 | 历史无端点证据的失败仍保留，低负载正式性能复测待做 |
 | C6 拓扑组合 | C6.1–C6.5 限定范围完成；双 JDK full 各 200 项通过 | binary batch/Scan/阻塞/订阅、sharded Pub/Sub 按需另排，不在本次完成范围 |
 | C7 TLS | 限定功能验收完成；JDK 8/21 full-tls 各 230 项通过 | [设计与原理](../architecture/network-model.md#c7-tls-传输设计)；真实 TLS 服务矩阵、拓扑与确定性 I/O 故障证据见核心收尾计划；生产长稳后置 |
-| C8 Starter 与发布 | 基础自动配置已有，生产验收未完成 | 多客户端、拓扑/TLS 配置、Health/Micrometer、质量门禁、许可证及发布 |
+| C8 Starter 与发布 | 多客户端、三拓扑/TLS、Health/Micrometer 与工程门禁已验收；Boot 2.7/8、Boot 3.5/21 各 248 项通过 | 许可证、正式发布及生产长稳仍待完成；具体版本和边界见核心收尾计划 |
 
 ### C5 两项收尾
 
@@ -39,7 +39,8 @@ C6.1～C6.5 已完成 binary、普通同步、String Pipeline/事务、BLPOP/BRP
   非复用端口绑定；生产 decoder 不改。旧 Binary/Sentinel 报告没有完整端点证据，仍不能逐次归因；
   其他等待异常保留，详情见[协议诊断](../testing/binary-resp-diagnostics.md)。
 - [ ] C5 不可变 binary 帧优化的低负载正式 Redis/Valkey A/B/B/A：已有高负载分配量诊断，
-  但不能代替吞吐/延迟验收。最近预检 load/CPU 为 1.770，高于 1.50，正式测试未启动。
+  但不能代替吞吐/延迟验收。C8 回归后最新预检 load/CPU 为 3.408（8 核、1m load 27.26），
+  高于 1.50，正式测试未启动。
   这不撤销历史网络模型阶段六的验收，也不沿用其结果替代本次性能测试。
 
 此前 C5 full 矩阵：JDK 8u202 / 21.0.7 各 149 tests、零失败/跳过；最终诊断断言定向回归
@@ -300,13 +301,19 @@ DedicatedConnectionLifecycleTest / DedicatedConnectionCompatibilityTest，范围
 
 - [x] C6：限定范围已完成，最终双 JDK full 各 200 项通过；详细范围见上表
 - [ ] 跨主机分区、生产长稳及扩展 JDK/OS 发布矩阵
+- [x] 当前版单机有界稳定性：`scripts/run-stability-soak.sh` 30 分钟通过，四版本
+  Redis/Valkey × RESP2/AUTO 共 132,543 worker cycles、零校验失败，队列排空、关闭后无新增
+  客户端线程；采样 FD/连接/线程数稳定。证据 `$TMPDIR/boba-straw-soak-ebJ184`。
+  另有 16 项真实拓扑恢复回归通过；不等同生产长稳或全拓扑/TLS 长跑。
+  今晚空闲窗口性能复测仍待执行，详见核心收尾计划的晚间验证记录。
+- [x] C8 后确定性故障复测：JDK 21 共 87 项通过（含 TLS 部分写/资源上限）；不等同生产长稳
 - [x] C7：JDK SSLEngine TLS、真实 TLS 服务矩阵及确定性 I/O 故障验收（限定环境见核心收尾计划）
-- [ ] C8：Spring Boot Health、Micrometer、Actuator、多客户端、拓扑/TLS 配置及版本矩阵
+- [x] C8 接入功能：Spring Boot Health、Micrometer、Actuator、多客户端、拓扑/TLS；限定版本矩阵见核心收尾计划
 - [ ] 自定义 Codec SPI（已有 String 与 byte[] 高频接口，不等于可插拔序列化 SPI）
 - [ ] binary Scan/batch、更多阻塞命令及选项；按实际需求扩展，不作为 C5 冻结范围缺口
 - [~] 常用 Lua 工作包：L1/L2 及容量配置已实现；L3 Standalone String 批量接口已完成限定矩阵验收。L4 拓扑组合未实施。阶段状态见[实施进度](lua-scripting-progress.md)，验证与历史回归待办见[测试记录](../testing/lua-scripting-validation.md)
 - [ ] Stream、Geo、HyperLogLog、更多 Server/ACL typed API：按需排期，不追求全命令
-- [ ] Checkstyle、SpotBugs、ArchUnit、JaCoCo、Revapi/japicmp、Enforcer 门禁
+- [x] Checkstyle、SpotBugs、ArchUnit、JaCoCo、japicmp、Enforcer、Animal Sniffer / Forbidden APIs 工程门禁；本机验证通过，远程 CI 矩阵不视为已执行
 - [ ] LICENSE、NOTICE、Maven Central 发布元数据
 
 Bitmap 的 GETBIT/SETBIT/BITCOUNT 高频接口已经实现，不再笼统列为未实现。

@@ -22,6 +22,7 @@ import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;
 
 /** Deterministic channel/engine fault injection; actual cryptography is covered by JSSE tests. */
+@org.junit.jupiter.api.Tag("fault-injection")
 class NioTlsFaultTest {
     @Test
     void zeroAndPartialWritesPreserveCiphertextAndDoNotConsumeTheNextFrame() throws Exception {

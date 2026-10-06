@@ -20,7 +20,8 @@
 | TLS | 核心 SSLEngine、rediss/显式 options、证书与端点校验、私有 CA/mTLS；三拓扑与专用连接已验收；生产长稳及扩展平台矩阵后置 | TlsConnectionTest、TlsOptionsTest、TlsTaskCapacityTest、NioTlsFaultTest、TlsCompatibilityTest（真实 Redis/Valkey）；环境与边界见核心收尾计划 |
 | 阻塞命令专用管理 | 三拓扑 String 同步/异步 BLPOP、BRPOP；有界按需单次连接，Cluster 同 Slot；更多阻塞和 binary 阻塞未提供 | DedicatedConnectionLifecycleTest / DedicatedConnectionCompatibilityTest / ClusterLifecycleTest / ClusterIntegrationTest / SentinelIntegrationTest |
 | Spring Boot | 基础单客户端配置；示例工程及 Boot 版本矩阵尚未验收 | 尚无 SpringContextTest，不作示例已验证声明 |
-| Codec SPI / Health / Micrometer / 多客户端自动配置 | 未完成；核心 Client 已有 metrics() 快照，不等于 Starter 的 Micrometer 集成；冷门普通命令保留 Raw 出口 | 不生成虚构 API |
+| Spring Boot Starter | 三拓扑默认 Bean、具名客户端、TLS store、生命周期、可选 Health/Micrometer；已测 Boot 2.7.18/Java 8、Boot 3.0.13/Java 17、Boot 3.5.6/Java 21 | BobaStrawAutoConfigurationTest、StarterCompatibilityTest；完整/定向矩阵边界见 C8 记录，用法见 quickstart |
+| 自定义 Codec SPI | 未完成；已有 String 与 byte[] 不等于可插拔序列化 SPI，按实际需求另排 | 不生成虚构 API |
 
 Raw API 是未封装普通命令的出口，不是任意状态型命令安全执行的保证。
 禁止通过共享 Raw/Pipeline 发起 MULTI、WATCH、SUBSCRIBE、SELECT 等改变连接状态的命令。

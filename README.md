@@ -4,6 +4,11 @@
 
 Boba Straw is a lightweight, pure Java Redis and Valkey client. It uses a Java NIO execution core and exposes synchronous and `CompletionStage` APIs without Reactor, RxJava, Netty, or Spring dependencies in the core artifact.
 
+Spring Boot integration includes topology-aware default clients, named clients, TLS store configuration,
+and optional Actuator health and Micrometer gauges. See the [usage guide](docs/usage/quickstart.md#spring-boot-配置)
+and [tested version boundaries](docs/implementation/core-completion-plan.md).
+Core remains Java 8 compatible and JDK-only; publishing is disabled until release prerequisites are met.
+
 ## Current status
 
 应用研发先看[接入指南](docs/usage/quickstart.md)、[普通命令、批量与分页](docs/usage/commands.md)

@@ -48,15 +48,64 @@ jobs:
           sh scripts/redis-test-up.sh
           sh scripts/cluster-test-up.sh
           sh scripts/sentinel-test-up.sh
+          sh scripts/tls-test-up.sh "$RUNNER_TEMP/boba-tls-certs"
       - name: Standalone, Cluster and Sentinel compatibility
+        env:
+          BOBA_TLS_CERT_DIR: ${{ runner.temp }}/boba-tls-certs
         run: >-
           mvn --batch-mode verify
           -Dboba.straw.runCompatibility=true
           -Dboba.straw.runCluster=true
           -Dboba.straw.runSentinel=true
+          -Dboba.straw.runTls=true
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: redis-integration-jdk${{ matrix.java }}
           path: '**/target/surefire-reports/**'
           if-no-files-found: warn
+
+  starter-boot3:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      matrix:
+        java: [17, 21]
+        boot: [3.0.13, 3.5.6]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ matrix.java }}
+          cache: maven
+      - run: mvn --batch-mode -Dspring-boot.version=${{ matrix.boot }} -pl boba-straw-spring-boot-autoconfigure -am clean verify
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: starter-boot${{ matrix.boot }}-jdk${{ matrix.java }}
+          path: '**/target/surefire-reports/**'
+
+  quality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+          cache: maven
+      - run: mvn --batch-mode -Pquality clean verify
+      - name: Public core API against the accepted C7 baseline
+        run: sh scripts/check-api-compatibility.sh 0783183823bb43a86cfd830cba157d1bd17200e2
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: quality-reports
+          path: |
+            **/target/site/jacoco/**
+            **/target/spotbugs*.xml
+            **/target/checkstyle-result.xml

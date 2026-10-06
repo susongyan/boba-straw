@@ -15,7 +15,7 @@
 | C5 | 高频命令与三层 API | 主要数据结构高频接口、命令元数据、Typed/特殊能力/Raw 边界与协议测试；不追求全命令 | 冻结功能完成；测试端口冲突 H 路径已修复，历史异常核对与正式性能复测待收尾 |
 | C6 | 拓扑功能收尾 | Cluster/Sentinel 与新增命令、专用连接组合验收；不重复宣称 C2/C3 已完成 | C6.1–C6.5 限定范围完成；JDK 8/21 full 各 200 项通过 |
 | C7 | TLS | SSLEngine、证书/主机名校验、拓扑与专用连接配置传播、关闭/重连测试 | 本文限定功能验收完成；JDK 8/21 full-tls 各 230 项通过 |
-| C8 | Starter 与发布 | Health、Micrometer、多客户端、配置/生命周期，质量门禁和兼容矩阵；许可证确定后才能发布 | C7 后实施功能；不执行正式发布 |
+| C8 | Starter 与发布 | Health、Micrometer、多客户端、配置/生命周期，质量门禁和兼容矩阵；许可证确定后才能发布 | 接入与工程门禁验收完成；Boot 2.7/Java 8、Boot 3.5/Java 21 各 248 项通过；正式发布仍阻断 |
 
 用户后续可调整顺序。每阶段只记录真实完成和验证项；不将“网络模型六阶段完成”等同整个客户端完成。
 不自动重试命令，网络断连、取消和超时均不能解释为服务端撤销。
@@ -29,6 +29,137 @@ L1 时 JDK 8 的事务等待超时及 Sentinel 模拟协议 H 异常本轮未复
 binary Scan/batch、完整 Stream/Geo/HLL 等未纳入 C5 冻结范围，后续按需排期。
 2026-09-29 确认不规划读写分离或 Replica 读策略；Cluster/Sentinel 普通读写走当前主节点，
 主从切换支持不变。该项不是 C6 或发布验收缺口，见[架构决策](../architecture/decisions.md)。
+
+## C8 Starter 与发布门禁（2026-10-06）
+
+目标是让业务只配置端点、拓扑与安全策略即可接入，同时不把 Spring 生命周期或监控依赖带入 core。
+Starter 不建立另一套连接池、执行器或重试层；具体命令与失败语义沿用核心 Client。
+
+### 接入与生命周期选择
+
+1. 保留旧 `boba.straw.uri/command-timeout/protocol` 默认单例用法；根据 mode 暴露实际客户端类型。
+2. 多客户端使用具名注册表，而非运行期动态注册任意 Bean；业务明确选择名称和拓扑类型。
+   默认客户端可独立关闭自动创建，各名称之间不隐式继承配置，避免认证和证书串用。
+3. 自动配置对应用定义的客户端退让；默认 Bean 和具名注册表分别负责自己创建的资源。
+   部分初始化失败回收已创建对象；应用不应在请求中 close 注入的 Client。
+4. TLS 使用标准 JDK store/SSLContext，数据节点和 Sentinel 控制链路分别配置；证书加载失败拒绝启动。
+5. Health 和 Metrics 仅读取核心状态，不在监控请求中建连、PING、刷新拓扑或重试业务命令。
+   Health 只说明本地就绪程度；Metrics 不伪造未暴露的 Sentinel 数据指标，不使用节点地址/Key 标签。
+
+使用方法、配置默认值与安全边界见[使用指南](../usage/quickstart.md#spring-boot-配置)。
+Spring Boot 入口兼容依据：[官方 Boot 3 迁移说明](https://github.com/spring-projects/spring-boot/wiki/Spring-Boot-3.0-Migration-Guide)。
+保留 factories 和 imports 双入口；支持声明以实际测试版本为准，不推断所有 Boot 3 小版本或 Boot 4。
+
+### 验证与发布边界
+
+- Starter 单元测试覆盖绑定、默认/具名生命周期、初始化失败回收、自定义 Bean 退让、可选依赖缺席、
+  Boot 发现自动配置、自动 MeterBinder 接入、Health 开关、监控不发命令、Meter 释放。
+- `StarterCompatibilityTest` 验证真实 Cluster、认证 Sentinel，以及混合三拓扑 TLS 配置到命令链路。
+- `scripts/run-starter-matrix.sh unit|full-tls JAVA8_HOME JAVA17_OR_21_HOME` 隔离源码和构建产物，
+  分别验证 Boot 2.7.18 与 3.5.6；full-tls 使用前述专用容器和 BOBA_TLS_CERT_DIR。
+- `mvn verify` 执行 core Enforcer、Java 8 API 检查以及普通测试中的 ArchUnit / 字节码检查；
+  `mvn -Pquality clean verify` 增加 Checkstyle、SpotBugs 高优先级阻断、Forbidden APIs 与 JaCoCo 报告。
+  按本机普通测试基线设置行/分支覆盖下限：core 80%/65%，autoconfigure 65%/50%；
+  覆盖率只是退化门禁，不代表协议/并发语义正确，真实容器组合仍须单独验收。
+- `mvn -pl boba-straw-core -am -Papi-check -Dboba.api.baseline=/absolute/core-baseline.jar verify`
+  比较公开核心 API 的源码/二进制兼容；internal 不作为稳定公共 API。首个正式版本尚未发布，
+  不自动从 Central 猜测基线，必须保存并指定经确认的基线制品。
+- 默认禁止 deploy；`release` profile 要求非快照版本、非快照依赖、LICENSE、NOTICE 和显式批准。
+  当前许可证未选择，不创建虚构许可证/NOTICE 内容，不配置账号、签名密钥或执行 Maven Central 上传。
+  门禁不等于已完成正式发布：许可证对应 POM 元数据、签名/制品检查及 Central 账号仍待发布批准。
+
+C8 接入功能与工程门禁已完成下列限定环境验收，不等于正式发布或生产长稳验收。
+首批增量质量验收通过：JDK 21 全六模块 `mvn -Pquality verify`，core 232 项（35 项容器测试按普通模式跳过），
+Starter 16 项（3 项容器测试跳过），无失败；随后 `jacoco:check@coverage-gate` 验证覆盖下限通过。
+日志 `/tmp/boba-c8-quality-accepted.log`、`/tmp/boba-c8-coverage-gate.log`。
+SpotBugs 只豁免两个 EventLoop 单写 volatile 计数位置及 JMH 1.37 生成代码的 dead-local-store，
+理由和精确匹配规则见 `config/spotbugs-exclude.xml`；不整体关闭并发规则或忽略业务 benchmark 源码。
+公开 core API 与 `0783183` 比较通过，证据 `$TMPDIR/boba-straw-api-wcS91o`；
+`mvn -N -Prelease validate` 按预期因 SNAPSHOT、缺失 LICENSE/NOTICE、缺少发布批准而失败，未上传制品。
+
+首轮并行验收保留在 `$TMPDIR/boba-straw-starter-q4sH1X`：Java 8 的 Starter TLS Sentinel 使用
+默认 500ms 发现预算时，在命令写出前超时；互通测试调整为与核心 TLS 矩阵一致的 3s 发现/5s 命令。
+Java 21 的既有 Cluster 测试也发生一次发现超时；未修改生产执行/重试策略，也未放宽该原有测试，
+须记录串行复测结果，不以推测的机器负载归因宣布该历史超时已修复。
+
+第二轮 `$TMPDIR/boba-straw-starter-PQZsIO` 中 Boot 2.7/Java 8 的 248 项全量测试通过；
+Java 21 的 232 项 core 测试也全部通过，但干净编译后的 Animal Sniffer 拦截了 ByteBuffer
+的 Java 9+ 协变返回值方法引用。这是实质性的构建兼容风险，而非误报：仅 source/target=8
+不能限制编译器使用新 JDK API，旧的增量 Java 8 产物可能掩盖它。
+现统一配置 `maven.compiler.release=8`，使用 Compiler Plugin 3.13.0 在 JDK 8 下自动回退
+source/target、在新 JDK 下使用 Java 8 API 签名；依据见
+[Maven 官方说明](https://maven.apache.org/plugins/maven-compiler-plugin/examples/set-compiler-release.html)。
+质量入口改用 clean verify；修复后的最终结果另行记录，不沿用此前增量构建的通过结论。
+
+最终结果（2026-10-06）：`mvn -Pquality clean verify` 六模块成功，包含 Java 8 API 签名、
+字节码/依赖边界、静态分析和覆盖率门槛，日志 `/tmp/boba-c8-quality-clean.log`。
+`scripts/run-starter-matrix.sh full-tls` 的 Boot 2.7.18 / JDK 8u202 与 Boot 3.5.6 / JDK 21.0.7
+**各 248 tests（core 232 + Starter 16），0 failures / 0 errors / 0 skipped**。
+证据 `$TMPDIR/boba-straw-starter-0PyYFl` 保存源码快照、日志和报告；当前 core 与 autoconfigure
+的 src 均与快照一致，之后仅格式化 POM、补 CI 版本项及文档。此前 Cluster 发现超时在本轮未复现，
+不据此宣称其根因已修复。首批质量报告另存 `/tmp/boba-c8-quality-evidence-xVqfbu`，以 clean 构建为最终依据。
+
+边界补验：Boot 3.0.13 / JDK 17 的 Starter 定向 16 项测试全部通过，包含三拓扑与 TLS。
+证据 `/tmp/boba-c8-boot30-java17-T70f51/validation.log`；这次只选择 Starter 测试，不能写成
+JDK 17 的 248 项完整回归。复现参数为 `-Dspring-boot.version=3.0.13` 配合
+`-Dtest=BobaStrawAutoConfigurationTest,StarterCompatibilityTest -Dsurefire.failIfNoSpecifiedTests=false`，
+并启用 runCluster/runSentinel/runTls。CI 已列出 Boot 3.0.13/3.5.6 与 JDK 17/21 组合，
+其余组合和其他 OS/JDK 的远程 CI 尚未执行，不由本机结果推断。
+release=8 修复后公开 core API 再次比较通过，最终证据 `$TMPDIR/boba-straw-api-evmi0M`。
+
+后续继续限定环境故障复测及性能基线；跨主机分区需要独立主机环境，生产长稳需要约定时长与负载，
+不把同机容器或几分钟回归声明为生产验收。冷门 typed API、自定义 Codec、binary batch/Scan 仍按需排期。
+
+### C8 后续验证记录
+
+- 2026-10-06 JDK 21 执行 `scripts/run-fault-injection-tests.sh`：**87 tests，0 failures / errors / skipped**。
+  TLS 确定性故障测试已纳入 fault-injection 标签；证据 `/tmp/boba-c8-fault-20261006`。
+- 全部构建/回归结束后检查正式压测条件：8 logical CPUs，1m load 27.26，load/CPU **3.408**，
+  超过 **1.50** 门槛。未关闭门槛、未停止其他应用、未启动正式 Redis/Valkey A/B/B/A。
+  此项仍需空闲测试窗口，固定基线/候选和入口见 [C5 收尾审查](c5-exit-review.md)。
+- 跨主机分区与生产长稳等待独立测试环境、运行时长和负载约束；不使用同机容器结果代替。
+- 远程多 OS/JDK CI、许可证选择、签名/制品审核与 Central 上传仍未完成。未提交或推送本批变更。
+
+### 单机稳定性与故障恢复验证（2026-10-06 晚间）
+
+本轮先验证稳定性，再在空闲窗口进行性能回归；不以吞吐跑分替代持续运行正确性。
+`scripts/run-stability-soak.sh [seconds]` 默认运行 1,800 秒，使用已有且经过镜像、端口核对的
+四个独立测试服务（Redis 5/6.2/7.4、Valkey 8.1），拒绝与另一个该入口的运行重叠。
+每个服务保留 RESP2、AUTO 各一个客户端，总计八个 worker；每轮提交四组异步 SET/GET，
+每十轮增加 typed Pipeline、事务与非 UTF-8 二进制读写，每轮暂停 100 ms，JVM 堆上限 256 MiB。
+所有响应检查内容，不仅计数；错误立即失败，不自动重放。仅写入 UUID 隔离的测试 Key，
+正常结束删除自己的 Key，异常清理失败保留为附加错误，不执行 FLUSH。
+
+入口保存源码快照及 SHA-256、环境、日志、测试结果与每秒资源采样到独立临时证据目录。
+检查结束后请求与写队列排空、健康负载中无重连/背压拒绝、close 后无新增客户端线程遗留；
+采样堆占用、线程、文件描述符和连接创建量，供比较运行前后趋势。堆使用量不是存活对象量，
+不能凭短跑的内存曲线宣称无泄漏；30 分钟仅是第一轮有界单机稳定性验证。
+Cluster/Sentinel 切换及取消、超时、Pub/Sub、TLS 故障通过既有真实拓扑/确定性测试单独验收，
+不声称本轮持续负载覆盖这些全部组合，也不等同跨主机网络分区或生产长稳。
+
+执行记录：
+
+- 87 项确定性故障测试通过，证据 `/tmp/boba-stability-fault-20261006-evening`。
+- 新增 opt-in 测试后根目录 `mvn test` 通过：core 233 项（36 项按需跳过）、Starter 16 项
+  （3 项按需跳过），零失败/错误；日志 `/tmp/boba-stability-unit-20261006.log`。
+- Colima 原处于停止状态，已启动；只启动核实后的六个 plaintext 测试容器。
+  Cluster 夹具存在重启时重复建群失败，启动入口已改为复用六节点完整配置，残缺配置拒绝覆盖。
+- 真实 Cluster/Sentinel 恢复回归 **16 项全部通过**，包括切换与专用能力生命周期；日志
+  `/tmp/boba-stability-topology-20261006.log`，XML 报告
+  `/tmp/boba-stability-topology-20261006-reports/`。
+- 60 秒短跑通过：3,947 worker cycles、零响应校验失败，结束时共享请求/写队列为零，
+  八条共享连接无重连，close 后新增客户端线程为零。证据 `$TMPDIR/boba-straw-soak-QpeeaX`。
+  短跑期间文件描述符保持 67；堆占用有 GC 回落，不能据此认定长期无泄漏。
+- 30 分钟运行 **通过**：2026-10-06 19:10:39（Asia/Shanghai）完成，测试实际耗时
+  1,801.036 秒，132,543 worker cycles（不是命令数）；1 test，零失败/错误/跳过，退出码 0。
+  证据 `$TMPDIR/boba-straw-soak-ebJ184` 包含源码快照、`exit-code.txt`、XML 报告、日志及
+  1,791 条资源采样。八条共享连接创建量保持 8、重连 0，文件描述符保持 67，JVM 活线程保持
+  32、客户端线程保持 16；最终 in-flight 与写队列均为 0，close 后新增客户端线程为 0。
+  堆占用采样范围 6,259,712～83,041,312 bytes，期间观察到 27 次回落；最终为
+  56,847,552 bytes。这说明本轮未观察到线程/FD/连接数增长，不能据此证明生产长期无内存泄漏。
+  本轮未开展跨主机分区、TLS/Cluster/Sentinel 持续负载或性能回归；对应故障回归单独计数。
+- 今晚 22:00（Asia/Shanghai）检查性能回归条件；稳定性存在阻断、其他测试仍运行或主机
+  负载门槛不通过时不开始性能回归，不拿旧快照跑分充当当前版本成绩。
 
 ## C7 设计与实施入口（2026-10-06）
 
