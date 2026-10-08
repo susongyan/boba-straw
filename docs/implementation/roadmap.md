@@ -34,6 +34,10 @@ C6.1～C6.5 已完成 binary、普通同步、String Pipeline/事务、BLPOP/BRP
 
 ### C5 两项收尾
 
+最新四批压测的结论和可复核原始 JSON 见
+[性能回归报告](../benchmarks/results/20261008-2214adb-vs-7bd1d55-regression/summary.md)；
+测量完成不代表性能验收通过。
+
 当前版关键路径性能回归：`2214adb` → `7bd1d55` 的 Redis critical 正式 ABBA 已完整执行，
 但出现明显回归信号，**不标记性能验收通过**：汇总 Async/Pipeline 吞吐 -24.3%/-28.7%，
 同时尾延迟和 allocation 上升。两组配对幅度波动较大，尚未定位代码与环境各自影响。

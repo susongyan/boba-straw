@@ -1,0 +1,20 @@
+timestamp_utc=20261006T130356Z
+baseline_ref=2214adb
+baseline_sha=2214adbd937f9f8ba61c874efb7fec25a2391cfe
+candidate_ref=7bd1d55
+candidate_sha=7bd1d55362aa240a3aedbabed7f10a08b3a7c057
+harness_ref=7bd1d55
+harness_sha=7bd1d55362aa240a3aedbabed7f10a08b3a7c057
+java version "21.0.7" 2025-04-15 LTS
+Java(TM) SE Runtime Environment (build 21.0.7+8-LTS-245)
+Java HotSpot(TM) 64-Bit Server VM (build 21.0.7+8-LTS-245, mixed mode, sharing)
+Apache Maven 3.9.6 (bc0240f3c744dd6b6ec2920b3cd08dcc295161ae)
+Maven home: <user-home>/Library/apache-maven-3.9.6
+Java version: 21.0.7, vendor: Oracle Corporation, runtime: /Library/Java/JavaVirtualMachines/jdk-21.jdk/Contents/Home
+Default locale: zh_CN_#Hans, platform encoding: UTF-8
+OS name: "mac os x", version: "15.4.1", arch: "x86_64", family: "mac"
+artifact_sha256_begin
+9a524c5496e4ae786947c0f1a867c74bdae31947704e1acdda5f3e8ee9933275  benchmark-results/20261006-2214adb-vs-7bd1d55-critical/artifacts/baseline-core.jar
+bcf24813727e39629f5c41e7efdaba353a941d99d326a032569bf6f0e62b8a68  benchmark-results/20261006-2214adb-vs-7bd1d55-critical/artifacts/candidate-core.jar
+06fd2b4b6a737bea8faae7db766b4992c4727cda417dcb2995051f3e2b318967  benchmark-results/20261006-2214adb-vs-7bd1d55-critical/artifacts/benchmarks-harness.jar
+artifact_sha256_end

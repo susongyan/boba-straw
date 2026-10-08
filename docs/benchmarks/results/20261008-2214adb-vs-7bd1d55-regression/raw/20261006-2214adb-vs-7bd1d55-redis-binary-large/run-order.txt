@@ -1,0 +1,4 @@
+01=baseline
+02=candidate
+03=candidate
+04=baseline

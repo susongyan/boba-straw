@@ -3,6 +3,15 @@
 每个正式 run 使用一个不可复写的子目录，并同时保存环境清单、原始 JMH JSON 与人工摘要。
 提交结果前确认没有凭据、用户目录或其他敏感环境变量；不要只提交整理后的表格。
 
+## 最新回归
+
+[2026-10-06～08 性能回归报告](20261008-2214adb-vs-7bd1d55-regression/summary.md)：
+`2214adb` → `7bd1d55`，同一 harness，Redis critical、Redis/Valkey binary 大 Value 与 Codec。
+四批测量完成，整体性能验收未通过；包含配对结果、脱敏环境、28 份无损原始 JSON 和校验。
+此候选提交的成绩不代表已发布制品或当前工作树的重新测量。
+
+## 历史归档
+
 | run | scope | status |
 | --- | --- | --- |
 | [`20260905-ca078f4-vs-7a2fe41-redis-critical`](20260905-ca078f4-vs-7a2fe41-redis-critical/summary.md) | Redis 7.4.2 critical ABBA | completed |

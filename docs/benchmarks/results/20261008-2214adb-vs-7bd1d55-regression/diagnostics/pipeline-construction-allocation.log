@@ -1,0 +1,24 @@
+baseline
+sample=0 bytesPerQueuedCommand=64.5
+sample=1 bytesPerQueuedCommand=64.5
+sample=2 bytesPerQueuedCommand=64.5
+sample=3 bytesPerQueuedCommand=64.5
+sample=4 bytesPerQueuedCommand=64.5
+candidate
+sample=0 bytesPerQueuedCommand=88.8125
+sample=1 bytesPerQueuedCommand=88.8125
+sample=2 bytesPerQueuedCommand=88.8125
+sample=3 bytesPerQueuedCommand=88.8125
+sample=4 bytesPerQueuedCommand=88.8125
+candidate
+sample=0 bytesPerQueuedCommand=88.8125
+sample=1 bytesPerQueuedCommand=88.8125
+sample=2 bytesPerQueuedCommand=88.8125
+sample=3 bytesPerQueuedCommand=88.8125
+sample=4 bytesPerQueuedCommand=88.8125
+baseline
+sample=0 bytesPerQueuedCommand=64.5
+sample=1 bytesPerQueuedCommand=64.5
+sample=2 bytesPerQueuedCommand=64.5
+sample=3 bytesPerQueuedCommand=64.5
+sample=4 bytesPerQueuedCommand=64.5

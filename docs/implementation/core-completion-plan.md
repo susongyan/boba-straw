@@ -212,6 +212,10 @@ Cluster/Sentinel 切换及取消、超时、Pub/Sub、TLS 故障通过既有真�
 
 ### 当前版本关键路径性能回归（2026-10-06）
 
+四批测量的独立报告、配对数据与 28 份原始 JSON 已整理到
+[性能回归归档](../benchmarks/results/20261008-2214adb-vs-7bd1d55-regression/summary.md)。
+下文保留实施与诊断过程；本机日志与 JAR 未全部归档，不将原始目录当作远程备份。
+
 用户授权提前开始，原 22:00 启动任务已停用。JDK 21、固定 Redis 7.4.2 容器（2 CPU / 2 GiB），
 启动预检 load/CPU=1.139，低于 1.50。执行 `full redis-critical`，每项 5×2s 预热、8×2s
 测量、3 forks、GC profiler；四段 ABBA 完整结束、进程退出码 0。基线为网络阶段六

@@ -1,0 +1,20 @@
+timestamp_utc=20261007T145641Z
+baseline_ref=2214adb
+baseline_sha=2214adbd937f9f8ba61c874efb7fec25a2391cfe
+candidate_ref=7bd1d55
+candidate_sha=7bd1d55362aa240a3aedbabed7f10a08b3a7c057
+harness_ref=7bd1d55
+harness_sha=7bd1d55362aa240a3aedbabed7f10a08b3a7c057
+java version "21.0.7" 2025-04-15 LTS
+Java(TM) SE Runtime Environment (build 21.0.7+8-LTS-245)
+Java HotSpot(TM) 64-Bit Server VM (build 21.0.7+8-LTS-245, mixed mode, sharing)
+Apache Maven 3.9.6 (bc0240f3c744dd6b6ec2920b3cd08dcc295161ae)
+Maven home: <user-home>/Library/apache-maven-3.9.6
+Java version: 21.0.7, vendor: Oracle Corporation, runtime: /Library/Java/JavaVirtualMachines/jdk-21.jdk/Contents/Home
+Default locale: zh_CN_#Hans, platform encoding: UTF-8
+OS name: "mac os x", version: "15.4.1", arch: "x86_64", family: "mac"
+artifact_sha256_begin
+d2031f8b4e0746a5605f080a074e854d7198780359f69fa229562b4da394a87e  benchmark-results/20261007-2214adb-vs-7bd1d55-valkey-binary-large/artifacts/baseline-core.jar
+3e9cf28ea27d90023822a28d2506bad540a1f3a90d255bc0674c9cb4129c2b83  benchmark-results/20261007-2214adb-vs-7bd1d55-valkey-binary-large/artifacts/candidate-core.jar
+efbb2aa9dc2a127a81f704e48ea78066c41ae94c7a337faf91a05cb21ada2ad0  benchmark-results/20261007-2214adb-vs-7bd1d55-valkey-binary-large/artifacts/benchmarks-harness.jar
+artifact_sha256_end

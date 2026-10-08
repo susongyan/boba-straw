@@ -122,6 +122,7 @@ Cluster、Sentinel、多客户端及 TLS 配置见[完整接入指南](docs/usag
 **验证与演进记录**（按阶段保留过程，不作为当前 API 清单）
 
 - [路线图](docs/implementation/roadmap.md) · [核心验证记录](docs/implementation/core-completion-plan.md)。
+- [最新压测报告](docs/benchmarks/results/20261008-2214adb-vs-7bd1d55-regression/summary.md) · [压测归档索引](docs/benchmarks/results/README.md)。
 - [网络模型演进记录](docs/implementation/network-model-history.md) · [命令开发历史](docs/implementation/command-development-history.md)。
 
 使用 AI 辅助接入时，先阅读[接入指南中的 AI 使用说明](docs/usage/quickstart.md#第一次让-ai-使用)。
