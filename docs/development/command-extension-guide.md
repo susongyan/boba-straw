@@ -64,10 +64,10 @@
 根目录执行 `mvn test`；真实服务端测试另按任务范围执行，不能把单元测试成功当全版本兼容。
 使用已有测试环境与独立 Key 前缀，不把生产实例当测试环境，不使用全库清理。
 
-## 元数据与三层接口（2026-09-28）
+## 元数据与三层接口
 
 实施设计见 [命令模型](../architecture/command-model.md)。高频范围以
-[覆盖清单](../implementation/command-coverage.md) 为准，不要求按 Redis 官网逐一生成所有方法。
+[命令速查](../usage/command-reference.md) 为准，不要求按 Redis 官网逐一生成所有方法。
 
 新增普通命令时先检查包内 CommandRegistry：已有条目复用，缺失则核实 Key 规则、连接模式与
 版本后注册。参数视图 CommandArgs 区分文本与原始字节；复杂 Key 位置不能猜作 first-key。
@@ -93,7 +93,7 @@ ORDINARY 来绕过限制。注册为 read-only 也不授权自动重试；since 
 冷门普通命令优先文档化 Raw 用法；未知 Cluster 命令必须显式声明全部 Key。
 
 CommandModelTest 自动遍历注册表检查查找、Key 元数据和连接模式一致性，但它不是自动的 Redis 语义证明。
-每种新增形式仍需参数/空值/错误/协议/路由测试；本次没有声称独立 AI Agent 或跨模型验收。
+每种新增形式仍需参数/空值/错误/协议/路由测试；遵循指南不代表已完成独立 Agent 或跨模型验收。
 尚无 `docs/commands/coverage.yaml`，现阶段在任务报告或相关功能文档记录命令/选项级状态；
 实现和验证分开，未运行与不适用分开。Skill 不替代 CI 或人工批准。
 

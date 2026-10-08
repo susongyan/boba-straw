@@ -765,7 +765,7 @@ C4 剩余验收：JDK 25、本次配置的远端平台矩阵；ARM64、长稳、
 ## C5 分批执行
 
 源码基线 `c82acdf`；执行顺序与接口边界集中记录在
-[命令覆盖清单](command-coverage.md)，避免将 Raw、类型化接口与协议能力混为一谈。
+[命令开发历史记录](command-development-history.md)，避免将 Raw、类型化接口与协议能力混为一谈。
 首批补 Standalone 二进制 String：MGET/MSET/MSETNX、SET 选项、APPEND/STRLEN/GETRANGE/SETRANGE。
 复用既有 CompletionStage、共享连接和取消传播；不增加同步二进制 facade，不更改拓扑入口。
 按命令 Skill 核实官方版本/返回语义，修正 SET GET 的旧注释，并新增编码/边界及真实矩阵测试。
@@ -773,7 +773,7 @@ C4 剩余验收：JDK 25、本次配置的远端平台矩阵；ARM64、长稳、
 
 C5.1 实际验收：macOS x86_64 / Colima，Oracle JDK 8u202 和 21.0.7，
 各 112 tests、0 failures/errors/skipped；真实四服务端 AUTO/RESP2，加原有 Cluster/Sentinel 回归。
-报告与方法边界见覆盖清单。JDK 11/17 本批未重跑，25/其他 OS 仍未验证。
+报告与方法边界见开发历史记录。JDK 11/17 本批未重跑，25/其他 OS 仍未验证。
 下一批为 C5.2 Key/TTL 与 String 数值/位操作二进制；C5 整体尚未完成。
 
 ### 2026-09-28 规划调整与本批落地
@@ -795,7 +795,7 @@ Scan typed 页结果、旧 mapper 全量迁移、复杂可选参数元数据以�
 
 本批最终 JDK 8u202/21.0.7 各 121 tests、0 failures/errors/skipped，包含四服务端
 AUTO/RESP2 与原有 Cluster/Sentinel 实测。期间修正一处既有公平性测试的观察 Future 竞态，
-保留原断言/超时；失败与最终报告位置见覆盖清单。没有重写 NIO 调度或宣称压测完成。
+保留原断言/超时；失败与最终报告位置见开发历史记录。没有重写 NIO 调度或宣称压测完成。
 
 ### C5 typed 执行复用第一批
 
@@ -803,7 +803,7 @@ AUTO/RESP2 与原有 Cluster/Sentinel 实测。期间修正一处既有公平性
 并为 Cluster/Sentinel 增加 async()，不复制命令实现。取消仍传播至既有拓扑 Future，
 没有增加自动重试；Standalone 阻塞路径不变，另外两种拓扑的阻塞方法明确本地拒绝。
 本批不包括 binary/sync 执行统一、Pipeline/事务 typed 结果、Scan 页模型，C5 仍在进行中。
-测试结果与证据追加在命令覆盖清单，不将抽象复用标为完整拓扑专用能力完成。
+测试结果与证据追加在命令开发历史记录，不将抽象复用标为完整拓扑专用能力完成。
 
 ### C5 typed 批量结果第二批
 
@@ -811,7 +811,7 @@ AUTO/RESP2 与原有 Cluster/Sentinel 实测。期间修正一处既有公平性
 executeTyped()/execTyped() 返回 BobaStrawBatchResult；原 Raw execute()/exec() 保留。
 初始高频 String 方法共 16 个，覆盖主要数据结构，不为批量新建线程或复用普通连接执行事务。
 新结果区分 WATCH abort、空事务、单条服务端错误和整批网络失败；取消仍排空 Pipeline 或销毁事务租约。
-验收与来源见命令覆盖清单。下一步为 Scan 页模型；binary/sync 执行统一、拓扑 binary 与专用组合仍需后续批次。
+验收与来源见命令开发历史记录。下一步为 Scan 页模型；binary/sync 执行统一、拓扑 binary 与专用组合仍需后续批次。
 
 ### C5 Skill 同步与 Scan 第三批
 
@@ -820,7 +820,7 @@ Typed 与特殊能力不互斥。新增 CMD-13/14、BSU010/011，清除 Sentinel
 随后依更新规则实现 scan() 分页入口与 ScanArgs/ScanPage，复用异步内核、保留取消传播；
 Cluster 禁止没有节点绑定的数据库 SCAN，单 Key 三种扫描复用 Slot 路由。
 仅 String 异步与基础 MATCH/COUNT；不隐式遍历、不去重、不提供快照或拓扑切换连续性承诺。
-验收记录见覆盖清单。binary/sync 执行统一、binary Scan 和剩余 C5 退出审查仍需后续处理。
+验收记录见开发历史记录。binary/sync 执行统一、binary Scan 和剩余 C5 退出审查仍需后续处理。
 
 ### Java 8 间歇性 Binary RESP 诊断
 
@@ -835,7 +835,7 @@ Java 8 定向 200 轮/400 条独立连接未复现。测试附加端点与服务
 基线 `b95a320`：Standalone binary 普通方法迁入 TypedCommand.binary / BinaryCommandExecutor，
 同步普通方法复用 TypedCommand，但仍等待 transport 并在调用线程解码；专用生命周期不变。
 本批没有新增公共方法，不包含拓扑 binary/sync 或 binary Scan/batch。
-参数深快照增加复制成本，性能基线需后续重测。验收记录见命令覆盖清单；
+参数深快照增加复制成本，性能基线需后续重测。验收记录见命令开发历史记录；
 C5 最终退出审查及历史非法 H 追踪仍未关闭。
 
 ### C5 不可变 binary 帧与退出核对第五批

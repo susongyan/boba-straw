@@ -250,7 +250,7 @@ Sentinel、TLS、Cluster 生产化等仍按本文件对应功能条目跟踪。
 
 普通 `sync()/async()/binary()` 不需要显式 `typed()`；`typed()` 用于批量构建。
 上述为冻结高频范围，非全命令/全选项；binary Scan/batch 和完整 Stream/Geo/HLL 不属于 C5 完成前提。
-方法清单、返回语义和验证依据见[命令覆盖](command-coverage.md)及[版本能力表](../usage/supported-features.md)。
+当前方法、选项和入口覆盖见[命令速查](../usage/command-reference.md)；验证依据见[版本能力表](../usage/supported-features.md)。
 
 基础命令、Pipeline、事务 helper、Lua 已有 Redis/Valkey 兼容测试。事务与阻塞连接新增
 DedicatedConnectionLifecycleTest / DedicatedConnectionCompatibilityTest，范围与环境见核心收尾计划。

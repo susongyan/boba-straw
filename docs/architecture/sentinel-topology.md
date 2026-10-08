@@ -1,7 +1,8 @@
 # Sentinel 主节点发现与连接生命周期
 
-更新：2026-10-05；C6.1a 增加 binary 普通异步 facade 与注册脚本二进制执行。
-现已增加 sync 普通 facade、String Pipeline、事务、BLPOP/BRPOP 和经典 Pub/Sub；验收见核心收尾计划。
+本文说明 Sentinel 的发现、角色校验、切换与资源归属。当前支持普通 String sync/async、
+binary async、注册脚本，以及 String Pipeline、事务、BLPOP/BRPOP 和经典 Pub/Sub。
+具体 API 范围见[命令速查](../usage/command-reference.md)，验证结果见[核心验证记录](../implementation/core-completion-plan.md)。
 
 ## 接入
 
@@ -33,7 +34,7 @@ URI、DB 选择暂未提供，不通过 Raw SELECT 改变共享连接状态。
 例如 `client.binary().get(keyBytes)` 返回 `CompletionStage<byte[]>`。
 与 String 共用同一已验证主节点连接和失效处理；切换时不重发在途请求，
 未发现有效主节点时明确未发送。注册脚本也可使用 `scripts().executeBinary(...)`。
-本批不提供 Raw binary 或 binary Scan/批量；普通 binary 入口不绕过命令元数据准入。
+当前不提供 Raw binary 或 binary Scan/批量；普通 binary 入口不绕过命令元数据准入。
 `sync()` 等待 transport 完成，不依赖用户 callback worker；BLPOP/BRPOP 仍使用专用连接。
 `pipeline()` 在提交时绑定主节点，不重放失败批次；typed 返回保留单项服务端错误。
 
@@ -86,7 +87,7 @@ ROLE 因本地准入容量不足被拒绝时，保留仍有效的主连接，不
 ## 失败与兼容性
 
 - 拓扑退休使用内部 `closeForTopologyChange()`：尚未写出和可能已写出的请求分别分类，不把主动切换误解为服务端撤销。
-- 相同修复用于 Cluster 旧节点摘除，补足 C2 对在途失败分类的承诺；普通用户 close 的既有行为不变。
+- Cluster 旧节点摘除使用相同的在途失败分类；普通用户 close 的既有行为不变。
 - HELLO/AUTH/CLIENT SETNAME 失败保留根因，未发送的应用请求不再只得到模糊的 Client closed。
 - 保留已有 public 方法签名；新增 Sentinel 独立入口，不改变 Standalone Builder 行为。
 - 共享 Raw 入口拒绝已知事务、订阅、阻塞和连接状态命令。XREAD/XREADGROUP 暂整体拒绝。
@@ -95,7 +96,8 @@ ROLE 因本地准入容量不足被拒绝时，保留仍有效的主连接，不
 
 本地观测入口：`masterAddress()`、`connectionState()`、`successfulDiscoveries()`、
 `failedDiscoveries()`。主节点地址为空代表尚无可交付主连接；READY 表示角色验证已完成且连接仍开放，
-不是持续的服务端可用性保证。更完整的 Metrics、配置和 Starter 集成留在 C8。
+不是持续的服务端可用性保证。Starter 的可选 Health、Micrometer 和多客户端配置见
+[接入指南](../usage/quickstart.md#spring-boot-配置)，指标不能替代命令结果或持续可用性判断。
 
 ## 测试环境与验证
 

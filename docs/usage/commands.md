@@ -1,6 +1,6 @@
 # 普通命令、批量与分页
 
-适用 `0.1.0-SNAPSHOT` 的 C5 实现，使用前固定来源提交；以下示例仅使用公开 API、Java 8。
+适用已发布的 `0.1.0-alpha.1`；以下示例仅使用公开 API、Java 8。完整方法与覆盖范围见[命令速查](command-reference.md)。
 传入的 Client 由应用启动时创建并长期复用；这些方法不负责关闭它。
 `join()` 示例用于允许阻塞的调用线程，不应放到异步回调线程等待另一条异步命令。
 
@@ -122,11 +122,4 @@ Standalone/Sentinel 支持四种 String 异步扫描；Cluster 仅支持 HSCAN/S
 Cluster 多 Key 必须同 Slot；未知命令需声明全部 Key。Raw 不应发送阻塞、订阅、认证或连接状态命令。
 更多限制见[能力表](supported-features.md)，失败分类见[失败与重试](failures-and-retries.md)。
 
-## 示例核验记录
-
-2026-09-28，核心基线 `706e616`：本页 CommandExamples 与快速开始 QuickStart 均经 JDK 8u202
-编译；在 Redis 7.4.2 上验证普通/二进制读取、Pipeline、事务成功路径和 Scan（RESP2/AUTO），
-使用随机 Key 并定点清理。该示例检查不包含 WATCH 竞争、断连或全部服务端版本。
-文档共 26 个本地链接检查通过。根 Maven 回归 147 项，0 failures/errors、22 项 opt-in 集成测试
-未启用；报告 `$TMPDIR/boba-straw-compatibility-7OYGxm`。临时示例核验目录
-`/private/tmp/boba-straw-guide-check-6zPIKG`，不是对外发布的示例模块。
+示例的历史核验范围见[测试记录](../testing/usage-examples-validation.md)。

@@ -17,7 +17,7 @@ The decoder has one RESP value model. RESP2 is a subset; RESP3 Push, Attribute, 
 
 The client does not automatically retry commands. A timeout or disconnect after a write may mean Redis executed the command; callers must not treat it as a safe negative acknowledgement.
 
-2026-09-29 Lua L2 实现的显式例外：使用注册脚本执行器时，首次 EVAL，
+注册脚本执行器有一个限定例外：首次 EVAL，
 有目标节点缓存提示时 EVALSHA，仅明确 NOSCRIPT 可恢复一次 EVAL。直接命令仍不自动回退，
 超时/断连/其他错误不恢复；脚本不得伪造 NOSCRIPT。这不是通用网络重试策略，详见
 [Lua 设计与流程图](lua-scripting.md)。
@@ -67,15 +67,16 @@ Standalone 使用调用方配置的端点，不因该决定自动发现或校验
 Standalone 已达到基础验收。Cluster 普通主节点命令具有节点退避重连、周期/事件拓扑发现、
 非 seed 旧节点摘除、已知多 Key 同 Slot 校验和单次 MOVED/ASK；ASK 使用单次专用连接，
 不污染共享连接状态和永久 Slot 映射。完整边界见 [cluster-topology.md](cluster-topology.md)。
-C6 增加单 Slot Pipeline/事务、BLPOP/BRPOP 与经典 Pub/Sub；不等于生产长稳验收。
+Cluster 支持单 Slot Pipeline/事务、BLPOP/BRPOP 与经典 Pub/Sub；不等于生产长稳验收。
 Sentinel 普通主节点命令通过独立入口实现：重新发现、同连接 ROLE 校验、两套认证与旧连接退休；
-见 [sentinel-topology.md](sentinel-topology.md)。C6 专用组合绑定主节点代次，失败不迁移/重放。
-C7 已接入 SSLEngine TLS 和三拓扑配置传播，并完成本机 JSSE、真实 TLS 服务矩阵及
-确定性 I/O 故障验收；不能等同生产长稳承诺。设计与边界见 network-model 的 C7 节。
+见 [sentinel-topology.md](sentinel-topology.md)。专用组合绑定主节点代次，失败不迁移/重放。
+TLS 使用 SSLEngine，并传播到三拓扑的物理连接。设计与边界见网络模型的 TLS 节；
+本机 JSSE、真实 TLS 服务矩阵与确定性 I/O 故障的证据见
+[核心验证记录](../implementation/core-completion-plan.md)，不能等同生产长稳承诺。
 
 ## Command surface
 
-C5 以主要数据结构的高频 API 为目标，不追求全量 Redis 命令。CommandRegistry 提供内部
+命令接口以主要数据结构的高频 API 为目标，不追求全量 Redis 命令。CommandRegistry 提供内部
 Key/连接模式元数据，Typed、特殊能力与 Raw 共享既有执行内核；三层边界见
 [command-model.md](command-model.md)。已知状态/阻塞命令不能经普通 Raw/Pipeline 或事务
 普通 command 入队绕过专用生命周期；未知普通 Raw 出口由调用方核实副作用，Cluster 显式全部 Key。

@@ -1,6 +1,7 @@
 # Cluster 连接、拓扑与专用能力
 
-更新：2026-10-05。C2 的普通路由基础上，C6 增加 binary、sync、Pipeline、事务、BLPOP/BRPOP 和经典 Pub/Sub。
+本文说明 Slot 路由、节点发现、重定向与专用连接的拓扑绑定。当前 API 支持范围见
+[命令速查](../usage/command-reference.md)，不以历史阶段编号判断能力。
 实测范围与未验证项见[核心收尾计划](../implementation/core-completion-plan.md)，不等于生产长稳验收。
 
 ## 对外入口
@@ -116,7 +117,7 @@ Slot owner 快照有变化时，当前实现保守退休所有节点的事务池
 每次观察占用既有 callback 容量，应保留一次观察，不无限注册。业务决定何时重新订阅，切换期间可能丢消息。
 客户端或外部 Resources 关闭后不再新建观察或订阅。
 
-事务、Pipeline、订阅、阻塞本批仅 String；binary batch/阻塞/订阅和更多阻塞命令不在此范围。
+事务、Pipeline、订阅、阻塞当前仅 String；binary batch/阻塞/订阅和更多阻塞命令不在此范围。
 语义依据：[Cluster spec](https://redis.io/docs/latest/operate/oss_and_stack/reference/cluster-spec/)，
 核实日期 2026-10-05。
 

@@ -1,19 +1,18 @@
 # Boba Straw 接入指南
 
 本资料面向应用研发，使用公开 API；实现状态见 [能力表](supported-features.md)，审查规则见
-[用法检查](review-checklist.md)。SDK 当前为 0.1.0-SNAPSHOT，正式发布与许可证尚未完成。
-示例依赖需先从对应提交构建安装到本地 Maven 仓库，或使用企业已批准的相同制品。
+[用法检查](review-checklist.md)。SDK `0.1.0-alpha.1` 已发布到 Maven Central，采用 Apache-2.0。
+当前为 Alpha，性能回归与生产长稳验证仍有待办；上线前应结合业务负载自行验证。
 
 ## 添加依赖
 
-核心最低 Java 8，只依赖 JDK，不要求 Spring 或响应式库。当前未正式发布到 Maven Central，
-请使用经团队确认的源码提交构建制品，或从企业仓库获取同一来源的 SNAPSHOT：
+核心最低 Java 8，只依赖 JDK，不要求 Spring 或响应式库。可直接从 Maven Central 获取：
 
 ```xml
 <dependency>
   <groupId>io.github.susongyan</groupId>
   <artifactId>boba-straw-core</artifactId>
-  <version>0.1.0-SNAPSHOT</version>
+  <version>0.1.0-alpha.1</version>
 </dependency>
 ```
 
@@ -78,7 +77,7 @@ boba:
 
 原有 uri、command-timeout、protocol 配置继续有效。密码由外部密钥管理注入，
 不要提交带真实凭据的 URI，也不要打印 URI。AUTO 使用 HELLO 3，显式 RESP2 跳过 HELLO。
-使用 Starter 时依赖坐标为 `io.github.susongyan:boba-straw-spring-boot-starter:0.1.0-SNAPSHOT`。
+使用 Starter 时依赖坐标为 `io.github.susongyan:boba-straw-spring-boot-starter:0.1.0-alpha.1`。
 业务项目应使用自己的 Spring Boot BOM/parent 统一依赖版本；Starter 不强行接管应用的 Boot 版本。
 Starter 可按 `mode: standalone / cluster / sentinel` 创建对应类型的默认 Bean。
 Cluster/Sentinel 用 `nodes` 配置多个 `host:port`（IPv6 使用 `[host]:port`），不在节点列表里放凭据。

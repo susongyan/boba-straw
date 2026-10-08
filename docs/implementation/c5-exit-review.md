@@ -21,7 +21,7 @@ H 诊断已定位并修复 Java 通配监听与 VS Code HTTP loopback 监听共�
 | 普通 Raw 与特殊隔离 | 已知状态/阻塞命令拒绝普通入口；未知 Cluster 声明全部 Key；不隐式跨 Slot 拆分 | CommandModelTest、ClusterSlotTest、ClusterIntegrationTest |
 
 对应 CMD-02/03/04/05/07/08/09/10/11/12/13/14；命令版本/参数来源沿用
-[覆盖清单](command-coverage.md)，本轮无新增命令形式。协议 decoder 未改动，碎片回归仍运行。
+[命令开发历史](command-development-history.md)，本轮无新增命令形式。协议 decoder 未改动，碎片回归仍运行。
 审查为本任务内复核，未进行独立 Agent 或跨模型行为验收。
 
 ## 第五批帧所有权检查

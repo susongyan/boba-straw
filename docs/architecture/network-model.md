@@ -1,6 +1,6 @@
-# Boba Straw 网络模型演进
+# Boba Straw 网络模型
 
-本文档定义 Boba Straw 的 NIO 网络模型、并发所有权和演进顺序。它是
+本文档定义 Boba Straw 的 NIO 网络模型、并发所有权和执行边界。它是
 `NioConnection`、协议解码、取消、超时和重连实现的事实来源。
 
 本文中的图使用 Mermaid **11.16.0** 语法作为校验基线（与 VS Code 的 Mermaid 预览版本保持
@@ -15,38 +15,38 @@
 - 多条连接共享有限数量的 Selector 线程，连接数不能线性增加线程数。
 - 不自动重放可能已经写入 Redis 的命令。
 
-## 当前落地状态
+## 当前结构概览
 
-阶段 1 已将单个 `NioConnection` 的 `preReady`、`outbound`、`pending`、请求状态和
+`NioConnection` 将其 `preReady`、`outbound`、`pending`、请求状态和
 取消处理收敛到该连接自己的 EventLoop。业务线程只提交任务，因此不会直接与网络
 写入竞争队列。
 
-阶段 2 已将物理连接迁移到 `BobaStrawClientResources` 持有的共享
+物理连接通过统一 factory 分配到 `BobaStrawClientResources` 持有的共享
 `NioEventLoopGroup`。Standalone、事务、Pub/Sub 和 Cluster 节点连接均通过统一
 factory 分配给固定 EventLoop；连接创建后不迁移。默认 Client 自建并拥有一个 loop，
 应用可显式传入 Resources 来让多个 Client 共享有限数量的 Selector 线程。
 
-阶段 3 已在每个连接上复用 16 KiB heap 读缓冲，并以可复用 `ByteBuffer[]` 聚合写入。
-一个 EventLoop 单轮最多执行 256 个跨线程任务；单连接最多读 64 KiB、写 64 KiB / 32 帧、
+每个连接上复用 16 KiB heap 读缓冲，并以可复用 `ByteBuffer[]` 聚合写入。
+一个 EventLoop 单轮最多执行 256 个跨线程任务；单连接最多读 64 KiB、写 64 KiB / 64 帧、
 分发 64 个完整 RESP 响应。命中响应上限时立即停止继续从 socket 读入，下一轮通过
 `selectNow()` 继续处理已缓存响应或可读 socket，避免 100 ms selector 等待和单连接长期独占。
 
-阶段 4 已将 decoder 改为显式的增量状态机：它使用可 compact 的输入缓冲、流式 Bulk
+decoder 使用显式的增量状态机：它使用可 compact 的输入缓冲、流式 Bulk
 状态和非递归 aggregate frame stack，不再对不完整回复反复重解析或拼接整个输入数组。
 `RespLimits` 在 decoder 内强制执行，并从 Standalone、重连、事务专用池、Pub/Sub 专用
 连接和 Cluster 每个节点连接统一传递。
 
-阶段 5A 已将命令、握手和空闲 PING 收敛到所属 `NioEventLoop` 的可取消 deadline
+命令、握手和空闲 PING 使用所属 `NioEventLoop` 的可取消 deadline
 队列。deadline 从请求创建时开始计时；在请求正常结束、取消或连接关闭后会被取消或跳过。
 
-阶段 5B 已将应用可见的 `CompletionStage` 完成和 Pub/Sub listener 转交给
+应用可见的 `CompletionStage` 完成和 Pub/Sub listener 转交给
 `BobaStrawClientResources` 持有的有界 callback dispatcher。普通命令在写入前先预留一个
 callback slot；若没有容量则本地返回 `BobaStrawBackpressureException`，不会发送 Redis 命令。
 每个 Pub/Sub 连接使用串行分发器保留消息顺序；慢消费者耗尽容量时关闭该专用连接，绝不静默
 丢弃消息。同步 API 直接等待内部 transport 完成，不会因为业务 callback worker 被占满而
 无限等待。
 
-阶段 5C 已增加每条物理连接独立的命令准入上限：默认最多 4,096 条应用命令和 16 MiB
+每条物理连接具有独立的命令准入上限：默认最多 4,096 条应用命令和 16 MiB
 尚未写入 socket 的编码帧。命令数从准入到响应排空一直占位；待写字节则随着实际
 `SocketChannel.write` 的 position 前进逐步归还。准入失败返回
 `BobaStrawBackpressureException` 且不会写 Redis。Standalone 的共享连接在 close lifecycle
@@ -55,7 +55,7 @@ Pub/Sub 的退订 ACK 到达后立即释放该专用连接的 socket 和 Selecto
 仍由 serial barrier 保序排空，随后关闭该 callback stream。慢 listener 因而不会长期占用物理连接；
 若 Client 在排空期间关闭，尚未开始的 listener 会被取消。
 
-## 目标结构
+## EventLoop 结构
 
 ```mermaid
 graph LR
@@ -195,10 +195,9 @@ EventLoop 单轮服务切片固定为：最多执行 256 个跨线程任务，�
 而不是等待正常的最多 100 ms selector 超时。
 
 这些数值由 package-private `NioIoLimits` 管理，暂不暴露为业务配置；它们是公平性保护，
-不是吞吐调优承诺。阶段 6 根据 Redis/Valkey 的 socket observation 把 frame 上限从 32 提高为
-128 候选值，同时保留 64 KiB 字节预算；正式 ABBA 虽确认明显吞吐收益，但 shared EventLoop
-公平性观测不满足验收且存在时间漂移，因此暂不采用 128。64 已通过功能回归和正式 ABBA，
-最终采用 64 frames / 64 KiB；实验环境与结果边界见下方阶段 6 验收。
+不是吞吐调优承诺。当前采用 64 frames / 64 KiB；32、128 和 64 帧候选的取舍与当时
+验收结果见[网络模型演进记录](../implementation/network-model-history.md)。旧实验不能替代
+当前发布版本的性能回归；最新结论以[核心验证记录](../implementation/core-completion-plan.md)为准。
 
 ```mermaid
 graph TD
@@ -273,7 +272,7 @@ Attribute 不会抢占 Push 或普通回复的 FIFO 位置。
 
 ## Deadline、健康检查与背压
 
-阶段 5A 已使每个 EventLoop 持有 deadline 队列，统一管理命令超时、握手和空闲 PING。
+每个 EventLoop 持有 deadline 队列，统一管理命令超时、握手和空闲 PING。
 deadline 使用单调时钟；请求在创建时开始计时，已完成、取消或
 关闭的请求会取消其 deadline，过期的请求只在所属 EventLoop 上改变队列状态。未发送的超时
 请求返回“未发送”语义；已开始写入的超时请求进入 `CANCELLED_DRAINING`，仍保留协议占位，
@@ -282,14 +281,14 @@ deadline 使用单调时钟；请求在创建时开始计时，已完成、取�
 同步 API 只等待内部 transport 请求的结果，不建立第二套独立超时定时器，也不依赖 callback
 dispatcher 的排队进度。
 
-阶段 5B 的 callback dispatcher 是资源级共享的有界容量。普通命令在发送前必须预留一个
+callback dispatcher 是资源级共享的有界容量。普通命令在发送前必须预留一个
 completion slot；没有 slot 时立即返回 `BobaStrawBackpressureException`，因此该命令明确
 未发送。已预留的命令即使 callback worker 暂时繁忙，也不会退回到 EventLoop 执行业务代码。
 Pub/Sub 消息也需要 slot；不足时客户端关闭该订阅专用连接，使丢失或重连语义显式可见。用户
 listener 异常被隔离，不能杀死 callback worker 或 Selector。该容量只保护结果交付，不承担
 每条 socket 的命令或内存限制。
 
-阶段 5C 的 connection-level capacity 与 callback capacity 相互独立：前者保护每条 socket 的
+connection-level capacity 与 callback capacity 相互独立：前者保护每条 socket 的
 命令/内存边界，后者保护应用结果交付。连接执行 `WRITING`/`SENT` 请求的取消或超时后，命令
 slot 只能在对应 Redis 响应排空时归还；排队取消、排队超时或连接失败可立即归还。完整帧写出
 后会释放其编码 `ByteBuffer`，并归还所有待写字节。
@@ -307,9 +306,9 @@ in-flight/待写字节与本连接背压拒绝计数。
 
 ## C7 TLS 传输设计
 
-本节属于**核心收尾计划 C7**，不是下文网络模型演进的“阶段 6”。截至 2026-10-06，
-SSLEngine 传输、配置传播、本机 JSSE 与真实 Redis/Valkey TLS 功能验收已落地。
+本节说明 SSLEngine 传输及三拓扑的 TLS 配置与安全边界。
 实施与验证状态统一记录在[核心收尾计划](../implementation/core-completion-plan.md)。
+标题保留 C7 编号，兼容已有文档链接。
 确定性故障测试与真实服务互通测试相互补充；功能验收不等于生产长稳验收。
 
 ### 我们要解决什么问题
@@ -485,7 +484,7 @@ application buffer 要求，按需扩容，每个缓冲硬上限为 256 KiB（�
 禁止建立无界“已加密待发送”队列；前一批密文未排空前，不继续无界消费命令帧。
 
 相比明文路径，TLS 多了一个不可随意回滚的边界：`wrap` 消费命令字节后，密文已经包含
-协议状态和序列信息，不能从密文中删除被取消的某条命令。C7 采用保守、可解释的规则：
+协议状态和序列信息，不能从密文中删除被取消的某条命令。TLS 采用保守、可解释的规则：
 
 | 请求所处位置 | 取消、超时或断连时的语义 |
 | --- | --- |
@@ -528,7 +527,7 @@ TLS 非正常关闭的原因。异步握手任务不得延长连接租约，更�
 
 ### 如何证明设计成立
 
-C7 功能完成至少需要以下证据，具体结果放到执行计划，不在设计文档堆叠运行日志：
+TLS 功能验收至少需要以下证据，具体结果放到执行计划，不在设计文档堆叠运行日志：
 
 1. 安全边界：受信任证书成功；未知 CA、主机名不匹配、过期证书失败；mTLS 缺少客户端身份
    失败、正确身份成功；失败前没有 Redis 明文或应用命令发送，也没有自动降级。
@@ -540,7 +539,7 @@ C7 功能完成至少需要以下证据，具体结果放到执行计划，不�
    都有 TLS 覆盖证据，不能以单个 TLS PING 代替拓扑验收。
 5. 基线回归：JDK 8 编译与测试、JDK 21 测试、现有明文回归通过；核心不增加外部运行时依赖。
 
-长稳、跨主机故障分区、扩展 JDK/OS 与正式性能压测在 C7/C8 功能实现后开展。
+长稳、跨主机故障分区、扩展 JDK/OS 与正式性能回归的结果和未覆盖范围，统一见验证记录。
 “功能通过”不等于完成这些生产环境验证，也不等于外部安全审计。
 
 设计依据：[JDK 8 SSLEngine](https://docs.oracle.com/javase/8/docs/api/javax/net/ssl/SSLEngine.html)
@@ -548,157 +547,8 @@ C7 功能完成至少需要以下证据，具体结果放到执行计划，不�
 [SSLParameters](https://docs.oracle.com/javase/8/docs/api/javax/net/ssl/SSLParameters.html)
 的端点身份校验配置。上面的所有权、背压与失败边界是 Boba Straw 的设计选择。
 
-## 分阶段实施与验收
+## 阅读与验证入口
 
-1. **连接正确性**：收敛队列状态所有权，修复取消/写入竞态；Future 在锁外完成。
-2. **共享 EventLoopGroup**：多个连接共享有限 Selector 线程，并完成生命周期测试。
-3. **I/O 吞吐**：复用读缓冲、写入聚合、读写公平预算。
-4. **RESP 增量状态机（已完成）**：减少累积复制和碎片重解析，并加入协议资源上限。
-5. **背压、回调隔离与连接生命周期（已完成）**：有界队列、统一 deadline、Pub/Sub
-   dispatcher、连接准入、退避重连和状态快照。
-6. **基准与故障注入**：并发取消、部分写、断连、慢消费者、Redis/Valkey 矩阵和 JMH。
-
-每阶段都必须保留 Java 8 兼容、执行 `mvn test`，并添加针对碎片输入、响应匹配、
-资源关闭和失败语义的测试。阶段完成前不得将下一阶段能力标记为生产可用。
-
-### 阶段 1 验收（已完成）
-
-- 握手尚未完成时并发提交的普通命令保存在 `preReady`，激活后按 FIFO 转入
-  `outbound`；不依赖 `CompletableFuture` 回调的执行顺序。
-- 取消待写请求会从队列移除；写入中或已发送请求进入
-  `CANCELLED_DRAINING`，其响应只用于恢复协议队列位置，绝不交给下一请求。
-- 普通连接上的 RESP3 `Attribute(Push)` 会在进入 `pending` 前分流；Pub/Sub
-  专用连接把订阅/退订 Push 确认匹配到对应请求，把消息分发给 listener。
-- 连接在任何命令字节写出前失败时返回 `BobaStrawCommandNotSentException`；写出
-  过任意字节后失败时返回 `BobaStrawCommandMayHaveExecutedException`；两种情况均不重试。
-- 以上路径由回环假 Redis 测试覆盖，并通过完整 `mvn test` 回归。
-
-### 阶段 2 验收（已完成）
-
-- `BobaStrawClientResources` 可配置固定数量的 selector 线程；默认 Client 资源使用
-  一个线程，外部 Resources 可被多个 Client 共享。
-- 一个 `NioConnection` 固定绑定到一个 loop。连接的 connect、SelectionKey、读写、
-  握手、空闲检查、关闭及 FIFO 队列仍只由该 loop 修改。
-- Standalone 重连、事务池、Pub/Sub 专用连接、Cluster seed/拓扑节点连接均经由
-  `NioConnectionFactory` 创建，不能回退到“一连接一线程”。
-- 单条连接断开只终止该连接；同一 EventLoop 上的其他连接继续服务。外部 Resources
-  的 Client 相互关闭隔离；关闭 Resources 会使在途请求终止并拒绝后续命令。
-- 上述生命周期语义由 `BobaStrawClientResourcesTest` 与既有协议/Cluster 回归覆盖，
-  并通过完整 `mvn test`。
-
-### 阶段 3 验收（已完成）
-
-- 每个连接仅分配一次 16 KiB heap 读缓冲，并复用 gathering write 所需的 buffer / request
-  数组；不会在每次 socket read 时创建临时 `ByteBuffer`。
-- 单轮任务、读、写和已解码响应均有内部预算：256 个任务、64 KiB 读、32 帧 / 64 KiB
-  写、64 个完整响应。已缓存响应会驱动 `selectNow()`，不会等待固定 selector 超时。
-- 写入状态只在实际 position 前进后变为 `WRITING`；部分帧、取消、临时写 limit 恢复和
-  `outbound -> pending` 推进均保持物理连接 FIFO。写 syscall 异常的参与帧按“可能已执行”
-  保守失败，绝不自动重试。
-- `NioConnectionIoTest` 以小预算验证大帧 + 后续命令的 RESP 帧完整性和顺序，并验证
-  响应 burst 每个 EventLoop turn 只分发预算内的响应；同一 loop 上繁忙 burst 也会让出
-  已就绪的另一连接。既有碎片协议与取消测试继续回归。
-
-### 阶段 4 验收（已完成）
-
-- `RespCodec.Decoder` 通过显式 frame stack 解析 RESP2/RESP3 aggregate，不使用递归；
-  累积输入采用 compact buffer，Bulk payload 以流式状态写入最终值，避免碎片输入的整段
-  拼接与已完成节点的反复解析。
-- 解析器严格校验 line 的 `CRLF`、Bulk trailer、RESP3 Null、Boolean 与 Verbatim 结构。
-  任意协议格式错误或资源超限使 decoder 进入终止状态，连接层关闭相应 socket。
-- `RespLimits` 保护 buffer、顶层回复、Bulk、line、aggregate depth 和累计元素数；默认值
-  可由 `BobaStrawClient.Builder.respLimits(...)` 与
-  `BobaStrawClusterClient.Builder.respLimits(...)` 覆盖，并完整传入重连、事务、Pub/Sub 和
-  Cluster 节点连接。
-- 单元测试覆盖逐字节/任意边界碎片的嵌套 Attribute、连续 Push/普通回复、大 Bulk、输入
-  数组复用、非法 wire 和所有资源限制边界；socket 测试验证协议超限关闭连接并保留已写命令
-  的“可能已执行”语义。完整 `mvn test` 回归后才可进入阶段 5。
-
-### 阶段 5A 验收（已完成）
-
-- 每个 `NioEventLoop` 使用自己的可取消 deadline 队列，并在 selector 等待前以最近 deadline
-  计算等待时间；到期任务和普通 NIO I/O 都只在该 EventLoop 上执行。
-- 普通命令、握手命令和空闲 PING 共享同一请求 deadline 模型。取消或超时的已写请求保留
-  `CANCELLED_DRAINING` 响应占位，不能让后续响应错配。
-- deadline 的取消、关闭和 generation 防护为后续连接 lifecycle 调度提供统一基础；不会
-  重发失败或超时命令。
-- `NioEventLoopDeadlineTest` 覆盖 deadline 所属线程、取消和 EventLoop 存活；协议 socket
-  测试覆盖命令 deadline。
-
-### 阶段 5B 验收（已完成）
-
-- `BobaStrawClientResources` 管理独立、有界的 callback worker；`CompletionStage` 的应用
-  continuation 不再在 NIO Selector 线程执行。结果 slot 在命令发送前预留，饱和时返回
-  `BobaStrawBackpressureException` 且不写 socket。
-- 每个有 push listener 的连接拥有串行 callback dispatcher，保持同一 Pub/Sub 连接的消息顺序。
-  慢 listener 耗尽容量时主动关闭该专用连接；其生命周期 listener 会从 Client 的专用连接集合
-  移除，避免死连接残留。
-- `BobaCallbackDispatcherTest` 覆盖容量预留和串行顺序；`BobaStrawClientResourcesTest` 覆盖
-  阻塞业务 continuation 不阻塞共享 EventLoop；协议 socket 测试覆盖 Pub/Sub callback 线程和
-  慢消费者关闭语义。完整 `mvn test` 回归后才可继续阶段 5C。
-
-### 阶段 5C 验收（已完成）
-
-- `BobaStrawConnectionLimits` 为每条物理连接设置 `maxInFlightCommands` 和
-  `maxQueuedWriteBytes`；Standalone 重连、事务池、Pub/Sub 专用连接和 Cluster 节点连接均传递
-  同一 Client-owned 配置。Pipeline 在写入前一次性预留全部命令，任一上限不足时零帧写出。
-- 已写取消/超时请求在 `CANCELLED_DRAINING` 中继续占用 command slot，直到对应回复消费；排队
-  取消和超时、断连和正常回复均正确归还 reservation。待写字节仅在实际 socket write 后归还。
-- 共享连接使用 close/ready lifecycle 而非固定轮询；失败候选按 capped exponential backoff 重建。
-  Client 不重放、迁移或隐藏已失败命令，并通过 `BobaStrawClientMetrics` 暴露连接状态与累计指标；
-  正字节 socket read/write 次数和字节数描述当前物理连接，replacement 后从零开始。
-- 派生的 String、binary 和 Pub/Sub `CompletionStage` 取消会传播回底层请求；同步 facade 直接等待
-  transport completion。UNSUBSCRIBE ACK 后立即释放专用连接的 socket/Selector；Pub/Sub 串行 callback
-  barrier 继续先交付 ACK 前已经解码的消息，再关闭 callback stream，不让慢 listener 持有物理连接。
-  Client 在排空期间关闭时会终止该 callback stream，不能在关闭后继续启动排队 listener。
-- `BobaStrawConnectionLifecycleTest` 覆盖容量拒绝、Pipeline 原子准入、取消后的响应占位和 capped
-  reconnect；`BobaStrawClientResourcesTest` 覆盖同步 API 不受阻塞 callback 影响及派生 Future 取消；
-  `BobaStrawProtocolNegotiationTest` 覆盖退订 barrier。完整 `mvn test` 已回归。
-
-### 阶段 6 性能验收（已完成，2026-09-15）
-
-- Redis critical 正式 ABBA 已完成：阶段 2 基线 `ca078f4` 与候选 `7a2fe41` 使用同一份、在
-  baseline API 上编译的 harness，按 A/B/B/A 顺序运行。异步窗口吞吐改善 2.30 倍、Pipeline
-  吞吐改善 1.29 倍、慢回调隔离平均延迟改善 3.59 倍；原始数据和环境见
-  [`benchmark result`](../benchmarks/results/20260905-ca078f4-vs-7a2fe41-redis-critical/summary.md)。
-- Codec 正式 ABBA 已完成：逐字节碎片解码吞吐改善 2.54 倍且 allocation 改善 559.57 倍，
-  128 回复 burst 吞吐改善 1.94 倍。初次 GET 编码 allocation 差异经对照不能归因于版本；
-  后续精确尺寸编码将 allocation 稳定降至 144 B/op，吞吐配对改善 1.82 倍。
-  原始数据见 [`codec result`](../benchmarks/results/20260905-ca078f4-vs-7a2fe41-codec/summary.md)。
-  修复验证见 [`encoder result`](../benchmarks/results/20260906-7a2fe41-vs-da546da-codec-encode/summary.md)。
-- 当前归档覆盖 Redis critical、Codec，以及 Redis 7.4.2 与 Valkey 8.1.3 全网络 baseline；结果见
-  [`redis result`](../benchmarks/results/20260906-9b3f116-redis-full/summary.md) 和
-  [`valkey result`](../benchmarks/results/20260906-0cbf813-valkey-full/summary.md)。两个服务端的
-  `byte[]` 大 value 均确认内核约为 1x payload copy，String 的第 2x 主要来自 UTF-8/String 转换；
-  Valkey 的独立 binary 结果见
-  [`binary result`](../benchmarks/results/20260906-b9ceff7-valkey-binary-large/summary.md)。
-- `TransportObservationBenchmark` 与 `redis-observe`/`valkey-observe` runner 已提供当前物理连接的
-  socket 次数/字节辅助计数，以及 fork JVM 和容器的系统采样。Redis 正式结果已归档于
-  [`redis observation`](../benchmarks/results/20260907-9dfa609-redis-observe/summary.md)，Valkey 正式结果已归档于
-  [`valkey observation`](../benchmarks/results/20260907-9ece1c7-valkey-observe/summary.md)。两者都确认
-  Pipeline 128 精确命中 32 commands/write。instrumentation 隔离 ABBA 未观察到可分辨的实质
-  吞吐或 allocation 回归，结果见
-  [`instrumentation ABBA`](../benchmarks/results/20260907-c4d9898-vs-9dfa609-transport-overhead/summary.md)。
-  128-frame 候选的吞吐明显提升，但 shared EventLoop 公平性退化，已按
-  [`gathering-write ABBA`](../benchmarks/results/20260908-b9de0a0-vs-0f3506a-gathering-write-128/summary.md)
-  暂不采用。64-frame 正式 ABBA 的健康连接平均/P99 延迟下降约 8.2%/15.4%，繁忙连接
-  完成量提高约 8.0%，Pipeline 吞吐整体持平；最终采用 64 frames / 64 KiB，见
-  [`64-frame ABBA`](../benchmarks/results/20260915-b9de0a0-vs-2214adb-gathering-write-64/summary.md)。
-  Async 吞吐配对方向不一致，不宣称确定收益。参数校准在 Redis 7.4.2、JDK 21、macOS/Colima
-  上完成，Valkey 全量与系统观测属于此前基线；其他 JDK/平台及最终参数的 Valkey A/B 不在本轮结论内。
-- 确定性网络故障注入通过 `fault-injection` JUnit 标签独立执行，覆盖 wire 分片、部分写预算、
-  回复 burst、写后断连、取消/超时 drain、连接隔离、慢 Pub/Sub listener 与退订竞态。矩阵和
-  复跑命令见 [`fault-injection`](../testing/fault-injection.md)。
-
-- 先探测本机 JDK、Colima 与容器运行状况；缺少的 JDK、JMH 构建依赖、Redis / Valkey
-  镜像和观测工具可直接安装。环境版本、镜像 digest、CPU 核数、内存、JVM 参数与命令必须
-  写入 `docs/benchmarks/`，使结果可复跑。
-- 同时保留阶段 2 提交 `ca078f4` 和网络模型最终提交的基线，分别在 Redis 与 Valkey 上
-  运行同一组工作负载：单命令 GET / SET、1/16/128 命令 Pipeline、大 value、碎片响应、
-  多 Client 共享一个 EventLoop 的 noisy-neighbor 场景，以及阶段 5 完成后的 Pub/Sub
-  慢消费者场景。
-- 记录吞吐、P50/P95/P99/P999 延迟、分配率、GC、CPU、线程数、socket read/write 次数和
-  每连接完成量；公平性以繁忙连接与健康连接的完成量和尾延迟共同判断，不能只报平均值。
-- 每个 JMH workload 至少包含 warmup、多个 measurement fork 和原始 JSON/文本输出；
-  网络端到端压测另保留客户端 / server 侧指标。没有完成这些步骤前，不对吞吐或延迟作
-  生产性能承诺。
+- [网络模型演进记录](../implementation/network-model-history.md)：原阶段计划、验收和参数实验。
+- [核心验证记录](../implementation/core-completion-plan.md)：当前版本验证结果与未覆盖范围。
+- [背压与容量](../usage/backpressure-and-capacity.md)和[生命周期](../usage/lifecycle.md)：使用方配置与资源管理。

@@ -10,6 +10,37 @@
 - 命令行短任务在 main 中使用 try-with-resources 是正确的，不应被审查为“每请求建连接”。
 - Pipeline 和 transaction builder 每个操作单独创建，不跨线程共用；Client 可以长期复用。
 
+## 连接配置
+
+普通命令按节点复用共享连接，不需要设置通用连接池大小。
+事务专用池按需创建；Standalone 可设置池上限、获取等待和空闲回收：
+
+```java
+BobaStrawClient.builder()
+    .transactionPoolMaxSize(8)
+    .transactionAcquireTimeout(Duration.ofSeconds(1))
+    .transactionIdleTimeout(Duration.ofMinutes(1))
+    .build();
+```
+
+共享连接默认不发送主动心跳。需要检测空闲连接时可设置：
+
+```java
+BobaStrawClient.builder()
+    .idlePingInterval(Duration.ofSeconds(30))
+    .build();
+```
+
+仅在连接空闲超过该间隔时发送 PING，业务流量活跃时不会额外发送心跳。
+Standalone 可通过 `reconnectInterval(...)`、`reconnectMaxInterval(...)` 设置共享连接退避区间；
+重连不会重放失败命令，退避期间新请求明确以未发送失败，而非无界排队。
+
+多个 Client 可共享 `BobaStrawClientResources`；`eventLoopThreads` 是 I/O 线程数量，
+不是连接池大小。`callbackThreads` 和 `callbackQueueCapacity` 管理应用回调，
+不执行 socket I/O。共享配置示例见[网络模型](../architecture/network-model.md)，
+容量配置见[背压指南](backpressure-and-capacity.md)。
+回复大小与嵌套限制由 `respLimits(...)` 配置，默认值与失败边界同样见网络模型文档。
+
 ## 异步和订阅
 
 公开异步返回 CompletionStage；不要为接入添加 Reactor/RxJava。

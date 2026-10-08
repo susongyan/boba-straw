@@ -1,199 +1,151 @@
 # Boba Straw
 
-Licensed under [Apache-2.0](LICENSE). See [NOTICE](NOTICE) for project notices.
-
 > Redis client with a straw — sip your data like bubble tea.
 
-Boba Straw is a lightweight, pure Java Redis and Valkey client. It uses a Java NIO execution core and exposes synchronous and `CompletionStage` APIs without Reactor, RxJava, Netty, or Spring dependencies in the core artifact.
+Boba Straw 是轻依赖、纯 Java 的 Redis / Valkey 访问客户端，面向应用研发提供同步、
+`CompletionStage` 异步和 `byte[]` 二进制 API。
 
-Spring Boot integration includes topology-aware default clients, named clients, TLS store configuration,
-and optional Actuator health and Micrometer gauges. See the [usage guide](docs/usage/quickstart.md#spring-boot-配置)
-and [tested version boundaries](docs/implementation/core-completion-plan.md).
-Core remains Java 8 compatible and JDK-only; publishing is disabled until release prerequisites are met.
+核心兼容 **Java 8+**，运行时仅依赖 JDK，基于 Java NIO 实现连接复用；
+不依赖 Netty、Reactor、RxJava 或 Spring。Spring Boot 通过独立 Starter 接入。
 
-## Current status
+**已发布：`0.1.0-alpha.1`** · [Maven Central](https://central.sonatype.com/artifact/io.github.susongyan/boba-straw-core/0.1.0-alpha.1) · [Apache-2.0](LICENSE)
 
-应用研发先看[接入指南](docs/usage/quickstart.md)、[普通命令、批量与分页](docs/usage/commands.md)
-和[能力表](docs/usage/supported-features.md)。普通命令直接调用 sync()/async()/binary()；
-typed() 仅用于 Pipeline/事务的类型化入队，不是全局开关。
+当前为 Alpha，适合评估和试用。已知性能回归、生产长稳及扩展平台验证仍有待办；
+发布不等于生产验收。详见[路线图](docs/implementation/roadmap.md)。
 
-维护者使用 AI 扩展 Redis 命令时，见[命令扩展开发指南](docs/development/command-extension-guide.md)
-及仓库内的 [Command Development Skill](.agents/skills/boba-straw-command-development/SKILL.md)。
+## 能力概览
 
-C5 聚焦主要数据结构的高频 API，不追求全 Redis 命令覆盖。三层接口与命令元数据设计见
-[命令模型与演进](docs/architecture/command-model.md)，实际实现/测试范围见
-[命令覆盖清单](docs/implementation/command-coverage.md)。
+- **协议与拓扑**：RESP2 / RESP3，Standalone、Sentinel、Cluster，多种子节点及拓扑刷新。
+- **常用命令**：Key、String、Hash、List、Set、ZSet、TTL、Counter、Bitmap 的高频 API；未封装的普通命令可使用 Raw API。
+- **专用操作**：Pipeline、事务、Lua 脚本注册与执行、经典 Pub/Sub、BLPOP / BRPOP、游标分页。
+- **连接管理**：按节点复用共享连接，有界背压、超时、取消与退避重连；事务、阻塞命令和订阅使用专用连接。
+- **安全与集成**：JDK TLS / mTLS、Spring Boot 自动配置、多客户端、可选 Actuator Health 和 Micrometer 指标。
 
-`0.1.0-alpha.1` is published on Maven Central. It provides a standalone NIO client with RESP2/RESP3 negotiation and synchronous/`CompletionStage` APIs. Key and String coverage includes conditional/expiring `SET`, `MGET`/`MSET`, counters, range and bit operations, expiry management, rename and type commands; Hash, List, Set and sorted-set currently provide their basic operations. Pipeline, dedicated transaction/Pub/Sub connections and scripts have basic implementations. Cluster and Sentinel include primary routing, topology recovery and the dedicated-command combinations listed in the capability table. Core SSLEngine TLS has local JSSE, deterministic I/O fault and real Redis/Valkey coverage, including TLS Cluster/Sentinel and dedicated connections. Known performance regressions, production endurance and broader platform validation remain pending; see the capability table and roadmap for tested scope.
+不同拓扑、String / binary 和批量入口的覆盖范围并不完全相同；不追求全命令、全选项封装。
+具体边界见[版本能力表](docs/usage/supported-features.md)。
+
+## 安装
+
+### 普通 Java 项目
+
+```xml
+<dependency>
+    <groupId>io.github.susongyan</groupId>
+    <artifactId>boba-straw-core</artifactId>
+    <version>0.1.0-alpha.1</version>
+</dependency>
+```
+
+### Spring Boot 项目
+
+使用 Starter 即可，无需重复添加 Core：
+
+```xml
+<dependency>
+    <groupId>io.github.susongyan</groupId>
+    <artifactId>boba-straw-spring-boot-starter</artifactId>
+    <version>0.1.0-alpha.1</version>
+</dependency>
+```
+
+应用使用自己的 Spring Boot BOM / parent 管理依赖版本。已测试 Boot 2.7.18 / Java 8、
+Boot 3.0.13 / Java 17、Boot 3.5.6 / Java 21；详细验证范围见[能力表](docs/usage/supported-features.md)。
+
+## 快速上手
+
+以下是连接本地 Redis 的短任务示例：
 
 ```java
-try (BobaStrawClient client = BobaStrawClient.builder().uri("redis://localhost:6379").build()) {
-    client.sync().set("tea", "boba");
-    String value = client.sync().get("tea");
+import io.github.susongyan.bobastraw.BobaStrawClient;
+import java.util.concurrent.CompletionStage;
+
+public class QuickStart {
+    public static void main(String[] args) {
+        try (BobaStrawClient client = BobaStrawClient.builder()
+                .uri("redis://localhost:6379")
+                .build()) {
+            client.sync().set("boba:tea", "milk tea");
+            String value = client.sync().get("boba:tea");
+            System.out.println(value);
+
+            CompletionStage<String> result = client.async().get("boba:tea");
+            // 仅为短任务示例等待完成，避免提前关闭 Client。
+            System.out.println(result.toCompletableFuture().join());
+        }
+    }
 }
 ```
 
-To force RESP2 (for example when connecting through an older proxy), configure:
+长期服务应在启动时创建 Client、在请求间复用、在停止时关闭，不要每次请求新建。
+普通命令直接使用 `sync()`、`async()` 或 `binary()`，无需开启 `typed()` 模式；
+`typed()` 是 Pipeline / 事务的类型化入队入口，见[命令与批量操作](docs/usage/commands.md)。
 
-```java
-BobaStrawClient.builder()
-    .uri("redis://localhost:6379")
-    .protocol(ProtocolVersion.RESP2)
-    .build();
+Spring Boot 使用 Starter 后配置连接，并注入自动创建的 `BobaStrawClient`：
+
+```yaml
+boba:
+  straw:
+    uri: ${BOBA_REDIS_URI}
+    command-timeout: 2s
+    protocol: AUTO
 ```
 
-默认 decoder 会限制单条回复、Bulk、嵌套层数和 aggregate 元素数，防止异常服务端回复占满
-客户端内存。需要读取较大的 value 或集合时，可以显式提高限制；格式错误或超限回复会关闭
-该物理连接，已写命令仍按“可能已执行”报告，不会自动重试：
+由环境变量提供连接地址和凭据，不要提交带密码的 URI。Spring 管理的 Client 由容器关闭。
+Cluster、Sentinel、多客户端及 TLS 配置见[完整接入指南](docs/usage/quickstart.md#spring-boot-配置)。
 
-```java
-RespLimits limits = RespLimits.builder()
-    .maxResponseBytes(128 * 1024 * 1024)
-    .maxBulkLength(96 * 1024 * 1024)
-    .maxAggregateElements(200_000)
-    .build();
+## 使用前需要了解
 
-BobaStrawClient client = BobaStrawClient.builder()
-    .uri("redis://localhost:6379")
-    .respLimits(limits)
-    .build();
-```
+- 默认 `AUTO` 尝试 `HELLO 3`，明确不支持时回退 RESP2；认证失败不会触发协议降级。可显式配置 `RESP2`。
+- 普通命令按节点复用连接，通常无需设置连接池大小；容量与资源所有权见[生命周期](docs/usage/lifecycle.md)与[背压指南](docs/usage/backpressure-and-capacity.md)。
+- **重连不重放失败命令**。超时、取消或断连不等于服务端未执行，业务应处理不确定结果，不能盲目重试写命令。
+- Cluster 多 Key 操作要求同 Slot，不隐式拆分；Pipeline 不保证原子性，事务中的命令错误也不意味着回滚。
+- Pub/Sub 不保证持久投递，断连或拓扑切换后不自动恢复订阅；Raw API 不能绕过专用连接和路由限制。
 
-普通命令默认按每个 Redis 节点复用一个共享多路复用连接，不需要配置连接池大小。
-事务与 Pub/Sub 使用独立连接；Standalone 的 `sync()/async().blpop/brpop` 也使用按需单次
-专用连接。阻塞连接默认并发上限 32，可用 `maxBlockingConnections(...)` 调整。
-事务支持 try-with-resources，取消/异常时销毁租约；使用约束见
-[生命周期指南](docs/usage/lifecycle.md)。其他阻塞命令不得直接发送到共享 Raw/Pipeline。
+完整失败语义见[失败、取消与重试](docs/usage/failures-and-retries.md)。
 
-每条物理连接默认最多接纳 4,096 条尚未排空响应的应用命令和 16 MiB 尚未写入 socket 的
-编码命令帧。超过任一上限会立即得到 `BobaStrawBackpressureException`，命令不会发送到 Redis。
-通常无需调整；只有在清楚知道单连接并发和大 Pipeline 内存预算时才显式设置。默认值是否限制
-服务端吞吐、容量估算和监控方法见
-[`背压与连接容量规划`](docs/usage/backpressure-and-capacity.md)：
+## 文档导航
 
-```java
-BobaStrawConnectionLimits limits = BobaStrawConnectionLimits.builder()
-    .maxInFlightCommands(8_192)
-    .maxQueuedWriteBytes(32L * 1024L * 1024L)
-    .build();
+**应用接入**
 
-BobaStrawClient client = BobaStrawClient.builder()
-    .uri("redis://localhost:6379")
-    .connectionLimits(limits)
-    .reconnectInterval(Duration.ofSeconds(1))
-    .reconnectMaxInterval(Duration.ofSeconds(30))
-    .build();
-```
+- [接入指南](docs/usage/quickstart.md)：依赖、Spring Boot、TLS 与多客户端。
+- [命令速查](docs/usage/command-reference.md)：按数据结构查看命令、binary / typed 批量覆盖和选项。
+- [命令、批量与分页](docs/usage/commands.md) · [Lua 脚本](docs/usage/lua.md)。
+- [生命周期](docs/usage/lifecycle.md) · [背压与容量](docs/usage/backpressure-and-capacity.md) · [用法检查](docs/usage/review-checklist.md)。
+- [版本能力表](docs/usage/supported-features.md)：按实际拓扑和 API 选择能力。
 
-共享 Standalone 连接断开后会按上述区间做指数退避重建，但绝不重放已经失败的命令。退避期间
-新调用明确以 `BobaStrawCommandNotSentException` 失败，不会为每次调用新建 socket。可通过
-无网络 I/O 的状态快照观察它：
+**设计与贡献**
 
-```java
-BobaStrawClientMetrics metrics = client.metrics();
-System.out.println(metrics.sharedConnectionState());
-System.out.println(metrics.inFlightCommands());
-System.out.println(metrics.queuedWriteBytes());
-```
+- [网络模型](docs/architecture/network-model.md) · [命令模型](docs/architecture/command-model.md) · [Lua 设计](docs/architecture/lua-scripting.md)。
+- [Cluster 拓扑](docs/architecture/cluster-topology.md) · [Sentinel 拓扑](docs/architecture/sentinel-topology.md)。
+- [命令扩展指南](docs/development/command-extension-guide.md) · [性能基准方法](docs/benchmarks/README.md)。
 
-默认每个 Client 自己管理一个 Selector EventLoop。应用中有多个 Client、Cluster 或专用连接时，
-可显式共享 `BobaStrawClientResources`；`eventLoopThreads` 是 I/O 线程数量，不是连接池大小。
-外部传入的 Resources 由应用在关闭全部 Client 后统一关闭：
+**验证与演进记录**（按阶段保留过程，不作为当前 API 清单）
 
-```java
-try (
-    BobaStrawClientResources resources = BobaStrawClientResources.builder()
-        .eventLoopThreads(2)
-        .callbackThreads(2)
-        .callbackQueueCapacity(2048)
-        .build();
-    BobaStrawClient cache = BobaStrawClient.builder()
-        .resources(resources)
-        .uri("redis://cache:6379")
-        .build();
-    BobaStrawClient sessions = BobaStrawClient.builder()
-        .resources(resources)
-        .uri("redis://sessions:6379")
-        .build()
-) {
-    // clients close before resources, in reverse declaration order
-}
-```
+- [路线图](docs/implementation/roadmap.md) · [核心验证记录](docs/implementation/core-completion-plan.md)。
+- [网络模型演进记录](docs/implementation/network-model-history.md) · [命令开发历史](docs/implementation/command-development-history.md)。
 
-`callbackThreads` 与 `callbackQueueCapacity` 只负责应用可见的 `CompletionStage` continuation 和
-Pub/Sub listener，永不执行 socket I/O。普通命令会在写入前预留一个结果交付位；资源级 callback
-容量耗尽时返回 `BobaStrawBackpressureException`，命令不会发往 Redis。Pub/Sub 同一连接保持消息
-顺序；慢 listener 耗尽容量时会关闭该专用连接，而不会静默丢弃消息。
+使用 AI 辅助接入时，先阅读[接入指南中的 AI 使用说明](docs/usage/quickstart.md#第一次让-ai-使用)。
+仓库内提供使用方与开发方 Skill；它们指导实现和审查，不替代测试或能力表。
 
-callback 容量和 `connectionLimits` 是两层独立保护：前者防止业务 callback 积压，后者防止单条
-socket 的请求数和待写内存无界增长。同步 API 直接等待内部 transport 结果，因此不会被繁忙的
-callback worker 阻塞。
+## 本地开发
 
-共享连接默认不发送主动心跳；如需检测长时间空闲连接，可启用：
-
-```java
-BobaStrawClient.builder()
-    .idlePingInterval(Duration.ofSeconds(30))
-    .build();
-```
-
-只有连接空闲超过该间隔时才会发送 PING；业务流量活跃时不会额外发送心跳。
-
-网络与 RESP 性能基准使用独立的 JMH 模块，环境、workload 和结果归档规则见
-[`性能基准`](docs/benchmarks/README.md)。
-
-事务专用池按需创建，可选配置其上限、获取等待和空闲回收：
-
-```java
-BobaStrawClient.builder()
-    .transactionPoolMaxSize(8)
-    .transactionAcquireTimeout(Duration.ofSeconds(1))
-    .transactionIdleTimeout(Duration.ofMinutes(1))
-    .build();
-```
-
-Cluster 启动发现可同时配置多个 seed。每次构建会随机化本次发现顺序，并依次执行 `CLUSTER SLOTS`；任一 seed 成功即可建立 slot 路由：
-
-```java
-BobaStrawClusterClient cluster = BobaStrawClusterClient.builder()
-    .seeds("redis-1:6379", "redis-2:6379", "redis-3:6379")
-    .build();
-```
-
-Cluster 普通命令已有节点退避重连、周期/事件拓扑刷新和同 Slot 多 Key 校验。MOVED 最多
-跟随一次，ASK 使用有界单次专用连接，不改变永久 Slot owner；未知命令必须显式声明全部 Key。
-Cluster/Sentinel 已提供 String Pipeline/事务、BLPOP/BRPOP 和经典 Pub/Sub；
-Cluster 批量与事务限同 Slot，专用操作切换后不迁移、不重放，订阅由业务显式恢复。详见
-[Cluster 连接与拓扑](docs/architecture/cluster-topology.md)。
-
-Sentinel 提供独立的 `BobaStrawSentinelClient`：多 Sentinel 发现、两套认证、ROLE 校验、
-周期发现与主节点切换，且不重放失败命令。配置与当前限制见
-[Sentinel 连接与拓扑](docs/architecture/sentinel-topology.md)。
-
-## Build
+在仓库根目录执行测试：
 
 ```bash
 mvn test
 ```
 
-## Local Redis/Valkey compatibility matrix
-
-With Colima started, launch the local services explicitly:
+真实 Redis / Valkey 兼容测试需显式启动本地容器；Colima / Docker 就绪后运行：
 
 ```bash
 ./scripts/redis-test-up.sh
-```
-
-The script starts Redis 5.0.14, 6.2.14 and 7.4.2 on ports 16379–16381,
-plus Valkey 8.1.3 on port 16382. It does not modify any other containers.
-Remove just these test containers with:
-
-```bash
+mvn -Dboba.straw.runCompatibility=true test
 ./scripts/redis-test-down.sh
 ```
 
-After the containers report ready, run the opt-in compatibility suite:
+普通 `mvn test` 不代表容器专项、完整兼容矩阵或性能验证全部执行。
+测试脚本说明见[启动脚本](scripts/redis-test-up.sh)，压测方法见[性能基准](docs/benchmarks/README.md)。
 
-```bash
-mvn -Dboba.straw.runCompatibility=true test
-```
+## 许可证
+
+采用 [Apache License 2.0](LICENSE)，项目声明见 [NOTICE](NOTICE)。

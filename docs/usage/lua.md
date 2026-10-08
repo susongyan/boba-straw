@@ -1,7 +1,7 @@
 # Lua 脚本使用指南
 
-当前工作树提供 EVAL、SCRIPT LOAD、EVALSHA 的直接方法与 ScriptOutput 显式结果类型。
-L2 增加 Client-owned `scripts()` 注册执行器；支持三种拓扑的 String 异步调用，
+`0.1.0-alpha.1` 提供 EVAL、SCRIPT LOAD、EVALSHA 的直接方法与 ScriptOutput 显式结果类型。
+Client-owned `scripts()` 注册执行器支持三种拓扑的 String 异步调用，
 三种拓扑均支持 `executeBinary`。完整机制见[设计稿](../architecture/lua-scripting.md)，阶段与验证分别见[实施进度](../implementation/lua-scripting-progress.md)和[测试记录](../testing/lua-scripting-validation.md)。
 
 ## 推荐：注册一次，按名称执行
@@ -143,7 +143,7 @@ try (BobaStrawTransaction tx = client.transaction()) {
 
 `script` 在入队时校验名称与 output 并捕获正文及参数，始终入队 EVAL；
 不使用或更新注册执行器的缓存提示，不占其逻辑在途额度，仍受批量连接准入约束。
-本阶段只支持 String 批量：byte[] 注册正文必须是合法 UTF-8，否则在入队前拒绝，不有损转码。
+当前只支持 String 批量：byte[] 注册正文必须是合法 UTF-8，否则在入队前拒绝，不有损转码。
 Cluster Pipeline 整批 Key 必须同 Slot；批内 MOVED/ASK 作为错误返回并触发后续拓扑刷新，
 不拆分或重放批次。Sentinel Pipeline 在提交时绑定一个已验证主节点，切换不迁移在途批次。
 Cluster 事务从 `cluster.transaction(routingKey)` 创建，所有脚本 Key 必须匹配该 Slot；
