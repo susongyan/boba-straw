@@ -1,5 +1,7 @@
 # Boba Straw
 
+Licensed under [Apache-2.0](LICENSE). See [NOTICE](NOTICE) for project notices.
+
 > Redis client with a straw — sip your data like bubble tea.
 
 Boba Straw is a lightweight, pure Java Redis and Valkey client. It uses a Java NIO execution core and exposes synchronous and `CompletionStage` APIs without Reactor, RxJava, Netty, or Spring dependencies in the core artifact.
@@ -22,7 +24,7 @@ C5 聚焦主要数据结构的高频 API，不追求全 Redis 命令覆盖。三
 [命令模型与演进](docs/architecture/command-model.md)，实际实现/测试范围见
 [命令覆盖清单](docs/implementation/command-coverage.md)。
 
-`0.1.0-SNAPSHOT` provides a standalone NIO client with RESP2/RESP3 negotiation and synchronous/`CompletionStage` APIs. Key and String coverage includes conditional/expiring `SET`, `MGET`/`MSET`, counters, range and bit operations, expiry management, rename and type commands; Hash, List, Set and sorted-set currently provide their basic operations. Pipeline, dedicated transaction/Pub/Sub connections and scripts have basic implementations. Cluster and Sentinel include primary routing, topology recovery and the dedicated-command combinations listed in the capability table. Core SSLEngine TLS has local JSSE, deterministic I/O fault and real Redis/Valkey coverage, including TLS Cluster/Sentinel and dedicated connections. Production endurance and broader platform validation remain pending; see the capability table for tested scope.
+`0.1.0-alpha.1` is being prepared for publication and is not yet available on Maven Central. It provides a standalone NIO client with RESP2/RESP3 negotiation and synchronous/`CompletionStage` APIs. Key and String coverage includes conditional/expiring `SET`, `MGET`/`MSET`, counters, range and bit operations, expiry management, rename and type commands; Hash, List, Set and sorted-set currently provide their basic operations. Pipeline, dedicated transaction/Pub/Sub connections and scripts have basic implementations. Cluster and Sentinel include primary routing, topology recovery and the dedicated-command combinations listed in the capability table. Core SSLEngine TLS has local JSSE, deterministic I/O fault and real Redis/Valkey coverage, including TLS Cluster/Sentinel and dedicated connections. Known performance regressions, production endurance and broader platform validation remain pending; see the capability table and roadmap for tested scope.
 
 ```java
 try (BobaStrawClient client = BobaStrawClient.builder().uri("redis://localhost:6379").build()) {

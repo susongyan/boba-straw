@@ -2,7 +2,7 @@
 
 本文档记录已实现功能、验证结果和后续工作，是研发与 AI 协作时的进度基线。
 
-更新时间：2026-10-06；最新已提交功能基线为 `7bd1d55`，包含 C8 与首轮单机稳定性验证。
+更新时间：2026-10-08；最新已提交功能基线为 `7bd1d55`，包含 C8 与首轮单机稳定性验证。
 Lua L3 已提交，Standalone String 批量限定范围已通过 JDK 8/21 full 验收。
 C6.1～C6.5 已完成 binary、普通同步、String Pipeline/事务、BLPOP/BRPOP 和经典 Pub/Sub，
 最终 JDK 8/21 full 各 200 项通过、无跳过，所有模块成功。
@@ -30,21 +30,25 @@ C6.1～C6.5 已完成 binary、普通同步、String Pipeline/事务、BLPOP/BRP
 | C5 高频命令与三层 API | 冻结功能已实现；已定位并修复测试端口冲突导致的 H 路径 | 历史无端点证据的失败仍保留，低负载正式性能复测待做 |
 | C6 拓扑组合 | C6.1–C6.5 限定范围完成；双 JDK full 各 200 项通过 | binary batch/Scan/阻塞/订阅、sharded Pub/Sub 按需另排，不在本次完成范围 |
 | C7 TLS | 限定功能验收完成；JDK 8/21 full-tls 各 230 项通过 | [设计与原理](../architecture/network-model.md#c7-tls-传输设计)；真实 TLS 服务矩阵、拓扑与确定性 I/O 故障证据见核心收尾计划；生产长稳后置 |
-| C8 Starter 与发布 | 多客户端、三拓扑/TLS、Health/Micrometer 与工程门禁已验收；Boot 2.7/8、Boot 3.5/21 各 248 项通过 | 许可证、正式发布及生产长稳仍待完成；具体版本和边界见核心收尾计划 |
+| C8 Starter 与发布 | 多客户端、三拓扑/TLS、Health/Micrometer 与工程门禁已验收；Boot 2.7/8、Boot 3.5/21 各 248 项通过 | 已选择 Apache-2.0；正式发布及生产长稳仍待完成；具体版本和边界见核心收尾计划 |
 
 ### C5 两项收尾
 
 当前版关键路径性能回归：`2214adb` → `7bd1d55` 的 Redis critical 正式 ABBA 已完整执行，
 但出现明显回归信号，**不标记性能验收通过**：汇总 Async/Pipeline 吞吐 -24.3%/-28.7%，
 同时尾延迟和 allocation 上升。两组配对幅度波动较大，尚未定位代码与环境各自影响。
-暂停后续 binary/Valkey/Codec 扩展压测，原始证据和配对结果见
+当时暂停后续扩展压测，后经用户授权完成其余三批；原始证据和配对结果见
 [核心收尾计划](core-completion-plan.md#当前版本关键路径性能回归2026-10-06)。
 第一轮归因已确认本地 Raw Pipeline 构造多分配 24.3125 B/command，另发现发送前参数复制与
 重复校验、text typed 双层准入及普通请求专用取消包装的优化候选；尚未解释全部吞吐差异，
 未改核心、未完成优化验收，具体测量边界见同一记录。
 用户授权继续后，Redis binary 大 Value 四轮 ABBA 已跑完：64 KiB/1 MiB 吞吐下降，
 大 payload 分配量接近基线，延迟结果波动；未标记性能验收通过。
-随后启动前负载/核 3.447 超过 1.50，队列停止，Valkey binary 与 Codec 尚未启动。
+随后曾因启动前负载/核 3.447 超过 1.50 停止；10 月 7 日恢复，10 月 8 日凌晨
+Valkey binary 与 Codec 的四段 ABBA 也全部完成，外层进程退出码 0。
+Valkey 的吞吐/尾延迟存在明显时间波动及部分 P99 退化，Codec 吞吐汇总变化
+-3.46%～+1.28%、分配量基本持平。本次安排的四批测量已完成，但整体性能验收仍未通过，
+不是 TLS/全 workload/生产长稳完成；详细配对表见核心收尾计划。自动结果检查已停用。
 
 - [~] `Unsupported RESP marker: H`：2026-10-06 已复现一条确定路径：本机 Java wildcard
   测试监听与 VS Code loopback HTTP 监听共存，RESP 请求得到 HTTP 400。测试统一改为明确地址、
@@ -317,7 +321,7 @@ DedicatedConnectionLifecycleTest / DedicatedConnectionCompatibilityTest，范围
   Redis/Valkey × RESP2/AUTO 共 132,543 worker cycles、零校验失败，队列排空、关闭后无新增
   客户端线程；采样 FD/连接/线程数稳定。证据 `$TMPDIR/boba-straw-soak-ebJ184`。
   另有 16 项真实拓扑恢复回归通过；不等同生产长稳或全拓扑/TLS 长跑。
-  后续关键路径性能复测已执行但出现回归信号，后续扩展压测暂停，详见核心收尾计划。
+  四批性能对照均已完成但回归尚未收尾，不等同性能验收通过，详见核心收尾计划。
 - [x] C8 后确定性故障复测：JDK 21 共 87 项通过（含 TLS 部分写/资源上限）；不等同生产长稳
 - [x] C7：JDK SSLEngine TLS、真实 TLS 服务矩阵及确定性 I/O 故障验收（限定环境见核心收尾计划）
 - [x] C8 接入功能：Spring Boot Health、Micrometer、Actuator、多客户端、拓扑/TLS；限定版本矩阵见核心收尾计划
@@ -326,7 +330,8 @@ DedicatedConnectionLifecycleTest / DedicatedConnectionCompatibilityTest，范围
 - [~] 常用 Lua 工作包：L1/L2 及容量配置已实现；L3 Standalone String 批量接口已完成限定矩阵验收。L4 拓扑组合未实施。阶段状态见[实施进度](lua-scripting-progress.md)，验证与历史回归待办见[测试记录](../testing/lua-scripting-validation.md)
 - [ ] Stream、Geo、HyperLogLog、更多 Server/ACL typed API：按需排期，不追求全命令
 - [x] Checkstyle、SpotBugs、ArchUnit、JaCoCo、japicmp、Enforcer、Animal Sniffer / Forbidden APIs 工程门禁；本机验证通过，远程 CI 矩阵不视为已执行
-- [ ] LICENSE、NOTICE、Maven Central 发布元数据
+- [x] 2026-10-08 选择 Apache-2.0：LICENSE、NOTICE 与父 POM 许可元数据已补齐
+- [~] Maven Central：`0.1.0-alpha.1` 全模块签名构建、13 份签名验签通过；已上传且 Central 远端验证通过（deployment `c5f5a994-c98a-45a7-8717-84e29d14c0ce`），等待手动确认公开发布及下载验证，见核心收尾计划
 
 Bitmap 的 GETBIT/SETBIT/BITCOUNT 高频接口已经实现，不再笼统列为未实现。
 2026-09-29 范围决定：不规划客户端读写分离或 Replica 读策略，不列为待办或发布验收缺口。

@@ -1,8 +1,8 @@
 # 核心客户端后续执行顺序
 
-更新时间：2026-10-06。C1 基线为 `2bd4993`，C2 基线为 `9a227d4`，C3 基线为 `ae3990f`，C4 基线为 `c696ae3`。
+更新时间：2026-10-08。C1 基线为 `2bd4993`，C2 基线为 `9a227d4`，C3 基线为 `ae3990f`，C4 基线为 `c696ae3`。
 此前后置的 TLS 现进入 C7：先完成 C7、C8 功能及必要的安全与生命周期测试，
-再开展长期稳定性和正式性能压测。正式发布仍受许可证选择等发布门禁约束。
+再开展长期稳定性和正式性能压测。2026-10-08 已选择 Apache-2.0，正式发布仍受其余发布门禁约束。
 
 ## 阶段与验收
 
@@ -65,8 +65,48 @@ Spring Boot 入口兼容依据：[官方 Boot 3 迁移说明](https://github.com
   比较公开核心 API 的源码/二进制兼容；internal 不作为稳定公共 API。首个正式版本尚未发布，
   不自动从 Central 猜测基线，必须保存并指定经确认的基线制品。
 - 默认禁止 deploy；`release` profile 要求非快照版本、非快照依赖、LICENSE、NOTICE 和显式批准。
-  当前许可证未选择，不创建虚构许可证/NOTICE 内容，不配置账号、签名密钥或执行 Maven Central 上传。
-  门禁不等于已完成正式发布：许可证对应 POM 元数据、签名/制品检查及 Central 账号仍待发布批准。
+  初始验收时许可证未选择；2026-10-08 用户确认采用 Apache-2.0，已添加官方 LICENSE 原文、
+  项目 NOTICE 与继承到模块的 POM 许可元数据。根目录 Maven 构建将声明打包至 JAR 的 META-INF，
+  同时保留原有模块资源。未虚构版权持有人或声称完成第三方代码权属审计。
+  首版已确认使用 `0.1.0-alpha.1`。新增 `release-artifacts` profile 生成源码/Javadoc，
+  `release` profile 要求同时启用该 profile，并配置 GPG 签名及 Central 上传插件。
+  Token 仅保存在本机 Maven settings，server ID 为 `central`，不进入仓库。
+  发布范围为 parent、core、autoconfigure、starter；空的 test-support 和压测模块不发布。
+  Starter 无 Java 类，Javadoc 分类包附项目 README、LICENSE、NOTICE 说明。
+  本地检查使用 `mvn -Prelease-artifacts test package`，不签名、不上传。
+  签名及发布准备好后，根目录使用
+  `mvn -Prelease-artifacts,release -Dboba.release.approved=true deploy`；
+  插件设置 `autoPublish=false`，上传后等待 Central 校验，仍需在 Portal 确认公开发布。
+  该 deploy 命令已在用户授权后执行，Central 远端校验通过（见下方记录）；尚未公开发布。
+  不把已知性能退化标成验收通过，alpha 版本不等同生产验收。
+  2026-10-08 JDK 21 本地 `release-artifacts` 全六模块测试/打包通过：
+  core 233 项（36 项跳过）、autoconfigure 16 项（3 项跳过），无失败；
+  core/autoconfigure/starter 的主包、sources、javadoc 九个 JAR 均通过归档完整性检查。
+  证据：`/tmp/boba-alpha-artifacts-final-20261008.log`。
+  `mvn -N -Prelease,release-artifacts validate` 在版本、profile、依赖、许可文件检查通过后，
+  因未设置显式批准属性按预期失败，证据 `/tmp/boba-alpha-release-gate-20261008.log`。
+  未生成签名、未上传；本轮没有重跑容器专项或性能回归。
+  后续用户已创建并上传公钥：`0C44B39E03C1A7212B916D7D94D4F8EFD8E79943`。
+  2026-10-08 核对本机签名密钥与 Ubuntu 公钥服务器完整指纹一致。
+  本地签名验证在 parent 阶段失败：GPG 返回 `No pinentry`，退出码 2；
+  该次构建未运行子模块测试、未完成签名验收、未上传。
+  保留日志 `/tmp/boba-alpha-signed-verify-20261008.log`；需先在用户本机完成密码交互，
+  再重跑签名与验签，不跳过签名门禁。此前不带签名的测试/打包结果保持不变。
+  用户在本机完成密码交互后，2026-10-08 JDK 21 全六模块
+  `mvn --batch-mode -Prelease-artifacts,release -Dboba.release.approved=true
+  -Dgpg.keyname=0C44B39E03C1A7212B916D7D94D4F8EFD8E79943 verify` 成功。
+  日志 `/tmp/boba-alpha-signed-verify-unlocked-20261008.log`；core 233 项（36 项跳过）、
+  autoconfigure 16 项（3 项跳过），无失败。发布范围内 parent POM 和三个模块各四份
+  POM/主包/sources/javadoc 共 13 份签名逐一验签通过，VALIDSIG 完整指纹与指定密钥一致。
+  签名门禁未跳过；未执行 deploy、未上传或公开发布，原失败日志保留。
+  用户随后授权上传，2026-10-08 使用上述 release profiles 和指定 GPG 指纹执行 deploy 成功，
+  Central 返回 deployment ID `c5f5a994-c98a-45a7-8717-84e29d14c0ce`，状态已验证通过，
+  需手动确认发布（`autoPublish=false`），不能描述为已在 Central 公开可下载。
+  上传包仅包含 parent、core、autoconfigure、starter，排除 test-support 与 benchmarks。
+  构建/上传日志 `/tmp/boba-alpha-central-upload-20261008.log`；原始包
+  `target/central-publishing/central-bundle.zip` 的 SHA-256 为
+  `e24e6543741ce2db1944790bc295a874a715c435226d6bffaad9b96c1858af15`。
+  后续需在 https://central.sonatype.com/publishing/deployments 确认公开发布并验证下载。
 
 C8 接入功能与工程门禁已完成下列限定环境验收，不等于正式发布或生产长稳验收。
 首批增量质量验收通过：JDK 21 全六模块 `mvn -Pquality verify`，core 232 项（35 项容器测试按普通模式跳过），
@@ -253,6 +293,54 @@ Redis 批次结束后，Valkey 启动前负载门禁得到 8 核、1m load=27.58
 不是 Redis JMH 执行失败。未关闭门禁、未重启重复任务；结果检查任务停用。
 结束时高负载并不能反推全程负载，但进一步限制性能归因可信度；本轮保存观察，不宣称正式
 性能验收通过。待空闲窗口继续剩余目标，核心、原始数据和已发现的 critical 回归记录不变。
+
+#### 剩余两批完成：Valkey binary 与 Codec（2026-10-08）
+
+10 月 7 日晚恢复 Colima 后启动，10 月 8 日凌晨完成；外层会话 37688 退出码 0。
+版本仍为 `2214adb` / `7bd1d55`，共同 harness `7bd1d55`、JDK 21、full ABBA。
+Valkey 启动负载/核 0.781，Codec 启动前 1.059，均通过 1.50 门禁，未并行执行。
+两批各四段完整结束：Valkey 八份 JSON 每份六项，Codec 四份 JSON 每份六项，均可解析，
+本节引用指标均为有限数值。原始日志、环境、构建记录、JAR 与校验仍在各自目录：
+
+- `benchmark-results/20261007-2214adb-vs-7bd1d55-valkey-binary-large/`
+- `benchmark-results/20261007-2214adb-vs-7bd1d55-codec/`
+
+Valkey 8.1.3 / AUTO / 2 CPU / 2 GiB 的结果如下。所有配对继续使用 B02/A01、B03/A04，
+汇总为两次候选均值/两次基线均值减一；吞吐越大越好，P99 与 allocation 越小越好。
+P99 均值比不是合并样本分位数，吞吐/延迟为分开运行。
+
+| 操作 / 大小 | 吞吐配对 | 吞吐汇总变化 | P99 配对 | P99 汇总变化 | allocation 配对 / 汇总变化 |
+| --- | --- | ---: | --- | ---: | --- |
+| GET 1 KiB | 1.302 / 1.056 | +17.6% | 1.271 / 0.932 | +8.0% | 1.0384 / 1.0177 / +2.79% |
+| GET 64 KiB | 1.072 / 1.057 | +6.5% | 1.203 / 0.957 | +6.4% | 1.0008 / 1.0014 / +0.11% |
+| GET 1 MiB | 2.402 / 1.007 | +46.5% | 1.148 / 0.965 | +4.8% | 1.0002 / 1.0002 / 约 +0.02% |
+| SET 1 KiB | 1.330 / 1.007 | +15.4% | 1.186 / 1.081 | +12.8% | 0.9747 / 1.0080 / -0.88% |
+| SET 64 KiB | 0.905 / 1.088 | -1.7% | 1.148 / 1.231 | +19.3% | 1.0000 / 0.9996 / -0.02% |
+| SET 1 MiB | 0.926 / 1.159 | +2.0% | 1.142 / 0.940 | +3.1% | 1.0002 / 1.0002 / 约 +0.02% |
+
+不能将 GET 1 MiB 的汇总 +46.5% 当稳定收益：四段吞吐分别为 43.38 / 104.22 / 89.47 /
+88.86 ops/s，第一段基线明显偏低，而第二组配对接近持平。多个 P99 和 SET 吞吐配对方向
+不一致，说明时间波动仍显著；SET 1 KiB、64 KiB P99 两组均变差，必须保留该退化信号。
+大 payload 分配量仍接近基线，不能据此否定其他执行路径的分配开销或宣布整体性能通过。
+
+Codec 仅测 throughput 与 GC 分配，**没有 P99 测量**：
+
+| Workload | 吞吐配对 | 吞吐汇总变化 | allocation 配对（B/A） | 近似分配 B/op |
+| --- | --- | ---: | --- | ---: |
+| decodeBulk64 | 1.0073 / 1.0180 | +1.26% | 1.0000 / 1.0000 | 120 |
+| decodeBulk64KiB | 0.9518 / 1.0213 | -1.39% | 1.0000 / 1.0000 | 65,592 |
+| decodeFragmentedBulkByteByByte | 0.9946 / 1.0311 | +1.28% | 1.0000 / 1.0000 | 1,080 |
+| decodeResp3Aggregate | 0.9614 / 0.9692 | -3.46% | 1.0000 / 1.0000 | 632 |
+| decodeResponseBurst128 | 1.0097 / 1.0156 | +1.26% | 1.0000 / 1.0000 | 64 |
+| encodeGet | 1.0081 / 1.0036 | +0.59% | 1.0000 / 1.0000 | 144 |
+
+分配比值按四位小数显示，不代表浮点数完全相等；六项未见明显分配放大，吞吐汇总范围
+-3.46%～+1.28%。RESP3 aggregate 两组均小幅下降，未经受控复测/显著性分析，不直接判定
+收益或回归成因；本轮 Codec 数据不足以解释 critical 中约 24%～29% 的端到端吞吐下降。
+
+本次安排的四批对照均已测量完成，但**性能验收仍未通过**：Redis critical 和 binary 的退化、
+参数构造额外分配及环境波动尚未收尾。TLS、全 workload 矩阵和生产长稳均不在完成声明中。
+不重复启动测试，不修改核心；自动结果检查停用。
 
 ## C7 设计与实施入口（2026-10-06）
 

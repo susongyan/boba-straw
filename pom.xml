@@ -3,11 +3,18 @@
   <modelVersion>4.0.0</modelVersion>
   <groupId>io.github.susongyan</groupId>
   <artifactId>boba-straw-parent</artifactId>
-  <version>0.1.0-SNAPSHOT</version>
+  <version>0.1.0-alpha.1</version>
   <packaging>pom</packaging>
   <name>Boba Straw</name>
   <description>Lightweight pure Java Redis and Valkey client</description>
   <url>https://github.com/susongyan/boba-straw</url>
+  <licenses>
+    <license>
+      <name>Apache License, Version 2.0</name>
+      <url>https://www.apache.org/licenses/LICENSE-2.0.txt</url>
+      <distribution>repo</distribution>
+    </license>
+  </licenses>
   <scm>
     <connection>scm:git:https://github.com/susongyan/boba-straw.git</connection>
     <developerConnection>scm:git:ssh://git@github.com/susongyan/boba-straw.git</developerConnection>
@@ -38,6 +45,20 @@
     <boba.coverage.branch>0.0</boba.coverage.branch>
   </properties>
   <build>
+    <resources>
+      <resource>
+        <directory>src/main/resources</directory>
+      </resource>
+      <resource>
+        <directory>${maven.multiModuleProjectDirectory}</directory>
+        <targetPath>META-INF</targetPath>
+        <filtering>false</filtering>
+        <includes>
+          <include>LICENSE</include>
+          <include>NOTICE</include>
+        </includes>
+      </resource>
+    </resources>
     <pluginManagement>
       <plugins>
         <plugin>
@@ -59,6 +80,50 @@
     </pluginManagement>
   </build>
   <profiles>
+    <!-- Local artifact checks do not enable signing or upload. -->
+    <profile>
+      <id>release-artifacts</id>
+      <build>
+        <plugins>
+          <plugin>
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-source-plugin</artifactId>
+            <version>3.4.0</version>
+            <configuration>
+              <forceCreation>true</forceCreation>
+            </configuration>
+            <executions>
+              <execution>
+                <id>attach-sources</id>
+                <phase>package</phase>
+                <goals>
+                  <goal>jar-no-fork</goal>
+                </goals>
+              </execution>
+            </executions>
+          </plugin>
+          <plugin>
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-javadoc-plugin</artifactId>
+            <version>3.12.0</version>
+            <configuration>
+              <source>8</source>
+              <encoding>UTF-8</encoding>
+              <detectJavaApiLink>false</detectJavaApiLink>
+            </configuration>
+            <executions>
+              <execution>
+                <id>attach-javadocs</id>
+                <phase>package</phase>
+                <goals>
+                  <goal>jar</goal>
+                </goals>
+              </execution>
+            </executions>
+          </plugin>
+        </plugins>
+      </build>
+    </profile>
     <profile>
       <id>quality</id>
       <build>
@@ -154,6 +219,38 @@
       <build>
         <plugins>
           <plugin>
+            <groupId>org.sonatype.central</groupId>
+            <artifactId>central-publishing-maven-plugin</artifactId>
+            <version>0.9.0</version>
+            <extensions>true</extensions>
+            <configuration>
+              <publishingServerId>central</publishingServerId>
+              <autoPublish>false</autoPublish>
+              <waitUntil>validated</waitUntil>
+              <excludeArtifacts>
+                <excludeArtifact>boba-straw-benchmarks</excludeArtifact>
+                <excludeArtifact>boba-straw-test-support</excludeArtifact>
+              </excludeArtifacts>
+            </configuration>
+          </plugin>
+          <plugin>
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-gpg-plugin</artifactId>
+            <version>3.2.8</version>
+            <configuration>
+              <bestPractices>true</bestPractices>
+            </configuration>
+            <executions>
+              <execution>
+                <id>sign-artifacts</id>
+                <phase>verify</phase>
+                <goals>
+                  <goal>sign</goal>
+                </goals>
+              </execution>
+            </executions>
+          </plugin>
+          <plugin>
             <groupId>org.apache.maven.plugins</groupId>
             <artifactId>maven-enforcer-plugin</artifactId>
             <version>3.5.0</version>
@@ -166,6 +263,9 @@
                 <configuration>
                   <rules>
                     <requireReleaseVersion/>
+                    <requireActiveProfile>
+                      <profiles>release-artifacts</profiles>
+                    </requireActiveProfile>
                     <requireReleaseDeps>
                       <onlyWhenRelease>true</onlyWhenRelease>
                     </requireReleaseDeps>
