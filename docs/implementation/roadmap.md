@@ -331,7 +331,7 @@ DedicatedConnectionLifecycleTest / DedicatedConnectionCompatibilityTest，范围
 - [ ] Stream、Geo、HyperLogLog、更多 Server/ACL typed API：按需排期，不追求全命令
 - [x] Checkstyle、SpotBugs、ArchUnit、JaCoCo、japicmp、Enforcer、Animal Sniffer / Forbidden APIs 工程门禁；本机验证通过，远程 CI 矩阵不视为已执行
 - [x] 2026-10-08 选择 Apache-2.0：LICENSE、NOTICE 与父 POM 许可元数据已补齐
-- [~] Maven Central：`0.1.0-alpha.1` 全模块签名构建、13 份签名验签通过；已上传且 Central 远端验证通过（deployment `c5f5a994-c98a-45a7-8717-84e29d14c0ce`），等待手动确认公开发布及下载验证，见核心收尾计划
+- [x] Maven Central 首版：`0.1.0-alpha.1` 已公开发布，deployment `c5f5a994-c98a-45a7-8717-84e29d14c0ce` 状态 `PUBLISHED`；13 份签名验签通过，公开下载的 13 份 POM/JAR 与本地已签名制品逐字节一致。仅完成 alpha 发布，不等同性能/生产验收，见核心收尾计划
 
 Bitmap 的 GETBIT/SETBIT/BITCOUNT 高频接口已经实现，不再笼统列为未实现。
 2026-09-29 范围决定：不规划客户端读写分离或 Replica 读策略，不列为待办或发布验收缺口。

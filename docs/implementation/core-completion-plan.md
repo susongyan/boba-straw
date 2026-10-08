@@ -77,7 +77,7 @@ Spring Boot 入口兼容依据：[官方 Boot 3 迁移说明](https://github.com
   签名及发布准备好后，根目录使用
   `mvn -Prelease-artifacts,release -Dboba.release.approved=true deploy`；
   插件设置 `autoPublish=false`，上传后等待 Central 校验，仍需在 Portal 确认公开发布。
-  该 deploy 命令已在用户授权后执行，Central 远端校验通过（见下方记录）；尚未公开发布。
+  该 deploy 命令已在用户授权后执行；Central 远端校验、用户确认公开发布及下载比对均已完成（见下方记录）。
   不把已知性能退化标成验收通过，alpha 版本不等同生产验收。
   2026-10-08 JDK 21 本地 `release-artifacts` 全六模块测试/打包通过：
   core 233 项（36 项跳过）、autoconfigure 16 项（3 项跳过），无失败；
@@ -106,7 +106,16 @@ Spring Boot 入口兼容依据：[官方 Boot 3 迁移说明](https://github.com
   构建/上传日志 `/tmp/boba-alpha-central-upload-20261008.log`；原始包
   `target/central-publishing/central-bundle.zip` 的 SHA-256 为
   `e24e6543741ce2db1944790bc295a874a715c435226d6bffaad9b96c1858af15`。
-  后续需在 https://central.sonatype.com/publishing/deployments 确认公开发布并验证下载。
+  用户随后确认已在 Portal 发布。2026-10-08 查询上述 deployment 的 API 状态为
+  `PUBLISHING`，尚非 `PUBLISHED`；四个模块的公开 POM 下载地址均返回 HTTP 404。
+  API 同时返回 `errors.common: Deployment components info not found`，原样记录，不将其
+  擅自解释为发布成功或终态失败。当时待发布处理完成及公开下载验证，未重复上传同一版本。
+  用户再次确认后，2026-10-08 复查 API 已返回 `PUBLISHED`，四个模块公开 POM 均为 HTTP 200。
+  从 `https://repo.maven.apache.org/maven2/io/github/susongyan/` 下载 parent POM、
+  core/autoconfigure/starter 各自的 POM、主 JAR、sources、javadoc，共 13 份文件，
+  与本地已签名制品逐字节比对全部一致，证据目录 `/tmp/boba-central-published-aHYl95`。
+  API 的组件信息字段仍返回上述 common 信息，但发布状态与实际公开下载已独立验证成功。
+  首版 alpha 已公开可下载；本次没有重新上传、变更同版本制品或声称性能/生产验收完成。
 
 C8 接入功能与工程门禁已完成下列限定环境验收，不等于正式发布或生产长稳验收。
 首批增量质量验收通过：JDK 21 全六模块 `mvn -Pquality verify`，core 232 项（35 项容器测试按普通模式跳过），
