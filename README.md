@@ -2,16 +2,29 @@
 
 > Redis client with a straw — sip your data like bubble tea.
 
-Boba Straw 是轻依赖、纯 Java 的 Redis / Valkey 访问客户端，面向应用研发提供同步、
-`CompletionStage` 异步和 `byte[]` 二进制 API。
+Boba Straw 是一个**轻依赖、易接入，重视资源边界和失败语义的 Java Redis / Valkey 客户端**。
+面向应用研发提供同步、`CompletionStage` 异步和 `byte[]` 二进制 API，支持
+Standalone、Sentinel 和 Cluster。
 
-核心兼容 **Java 8+**，运行时仅依赖 JDK，基于 Java NIO 实现连接复用；
+核心兼容 **Java 8+**，运行时仅依赖 JDK，基于自研 Java NIO 网络内核实现连接复用；
 不依赖 Netty、Reactor、RxJava 或 Spring。Spring Boot 通过独立 Starter 接入。
 
 **已发布：`0.1.0-alpha.1`** · [Maven Central](https://central.sonatype.com/artifact/io.github.susongyan/boba-straw-core/0.1.0-alpha.1) · [Apache-2.0](LICENSE)
 
+## 设计重点
+
+我们希望 Java 应用既能方便地访问 Redis，也能理解请求在过载、超时和断连时会发生什么。
+除了常用命令，Boba Straw 还关注三个执行边界：
+
+- **连接各司其职**：普通命令复用连接；事务、阻塞命令和订阅使用专用连接，避免状态相互污染。
+- **资源有界，过载可见**：限制待响应请求、待写字节和回调容量；业务回调与网络线程隔离，控制积压和慢回调的影响。超限明确拒绝，不无限缓存。
+- **连接恢复不等于命令重试**：重连不自动重放失败命令，并尽可能区分“明确未发送”和“可能已执行”，让业务正确处理不确定结果。
+
+使用与配置见[生命周期](docs/usage/lifecycle.md)、[背压与容量](docs/usage/backpressure-and-capacity.md)
+和[失败处理](docs/usage/failures-and-retries.md)；实现原理见[网络模型](docs/architecture/network-model.md)。
+
 当前为 Alpha，适合评估和试用。已知性能回归、生产长稳及扩展平台验证仍有待办；
-发布不等于生产验收。详见[路线图](docs/implementation/roadmap.md)。
+不追求覆盖全部 Redis 命令，也不宣称性能优于 Lettuce。发布不等于生产验收，详见[路线图](docs/implementation/roadmap.md)。
 
 ## 能力概览
 
